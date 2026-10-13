@@ -1,8 +1,11 @@
 *.log
+.agents
+.aws
 .DS_Store
 .env
 .env.backup
 .env.production
+.editorconfig
 .phpactor.json
 .phpunit.result.cache
 /.codex
@@ -26,3 +29,5 @@ _ide_helper.php
 Homestead.json
 Homestead.yaml
 Thumbs.db
+AGENTS.md
+CLAUDE.md
