@@ -12,7 +12,7 @@ class TargetPolicy
         if (! is_array($parts) || ! in_array($parts['scheme'] ?? '', ['http', 'https'], true)
             || empty($parts['host']) || isset($parts['user']) || isset($parts['pass'])
             || ! in_array($mode, ['public', 'local'], true)) {
-            throw new InvalidArgumentException('Enter an HTTP or HTTPS website URL without embedded credentials.');
+            throw new InvalidArgumentException(__('messages.target_url'));
         }
         if ($mode === 'local') {
             $allowed = [];
@@ -21,33 +21,33 @@ class TargetPolicy
                 if (! is_array($configured) || ! in_array($configured['scheme'] ?? '', ['http', 'https'], true)
                     || empty($configured['host']) || isset($configured['user']) || isset($configured['pass'])
                     || isset($configured['query']) || isset($configured['fragment']) || ! in_array($configured['path'] ?? '', ['', '/'], true)) {
-                    throw new InvalidArgumentException('AUTOQA_LOCAL_TARGETS must contain exact HTTP origins without credentials, paths, queries, or fragments.');
+                    throw new InvalidArgumentException(__('messages.local_config'));
                 }
                 $allowed[] = $this->origin($entry);
             }
             if (! in_array($this->origin($url), $allowed, true)) {
-                throw new InvalidArgumentException('This local address is not configured on the browser server. Add its exact origin to AUTOQA_LOCAL_TARGETS, or use a public tunnel URL.');
+                throw new InvalidArgumentException(__('messages.local_not_configured'));
             }
 
             return;
         }
         $host = trim(strtolower($parts['host']), '[]');
         if ($host === 'localhost' || str_ends_with($host, '.localhost') || str_ends_with($host, '.local')) {
-            throw new InvalidArgumentException('Choose Local website for localhost on the browser server, or provide a tunnel URL for another computer.');
+            throw new InvalidArgumentException(__('messages.local_mode'));
         }
         if (filter_var($host, FILTER_VALIDATE_IP)) {
             if (! $this->isPublicIp($host)) {
-                throw new InvalidArgumentException('Public website mode cannot access private or reserved network addresses.');
+                throw new InvalidArgumentException(__('messages.private_address'));
             }
         } else {
             $records = dns_get_record($host, DNS_A | DNS_AAAA);
             if (! $records) {
-                throw new InvalidArgumentException('The website hostname could not be resolved. Check the address.');
+                throw new InvalidArgumentException(__('messages.unresolved_host'));
             }
             foreach ($records as $record) {
                 $ip = $record['ip'] ?? $record['ipv6'] ?? null;
                 if ($ip && ! $this->isPublicIp($ip)) {
-                    throw new InvalidArgumentException('This hostname resolves to a private or reserved address. Use a configured local target instead.');
+                    throw new InvalidArgumentException(__('messages.private_host'));
                 }
             }
         }
@@ -57,7 +57,7 @@ class TargetPolicy
     {
         $parts = parse_url($url);
         if (! is_array($parts) || ! isset($parts['scheme'], $parts['host'])) {
-            throw new InvalidArgumentException('Invalid website origin.');
+            throw new InvalidArgumentException(__('messages.invalid_origin'));
         }
         $scheme = strtolower($parts['scheme']);
         $port = $parts['port'] ?? ($scheme === 'https' ? 443 : 80);

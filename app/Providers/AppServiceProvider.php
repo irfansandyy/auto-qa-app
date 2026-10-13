@@ -2,7 +2,9 @@
 
 namespace App\Providers;
 
+use App\Http\Middleware\ApplyUiPreferences;
 use Illuminate\Support\ServiceProvider;
+use Livewire\Livewire;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -11,7 +13,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->useLangPath($this->app->resourcePath('lang'));
     }
 
     /**
@@ -19,6 +21,6 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        Livewire::addPersistentMiddleware([ApplyUiPreferences::class]);
     }
 }

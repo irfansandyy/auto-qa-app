@@ -1,0 +1,25 @@
+<?php
+
+return [
+    'skip_content' => 'Skip to content',
+    'product_heading' => 'Website testing',
+    'product_heading_second' => 'and repair',
+    'product_description' => 'Manage projects, review test results, and track proposed repairs.',
+    'signin_heading' => 'Sign in to your workspace',
+    'signin_description' => 'Use the operator account created during setup.',
+    'signin_error' => 'We couldn’t sign you in.',
+    'email' => 'Email address',
+    'password' => 'Password',
+    'remember' => 'Keep me signed in',
+    'signin' => 'Sign in',
+    'repository_note' => 'Repository access is connected separately with a GitHub App.',
+    'setup_label' => 'First-time setup',
+    'setup_heading' => 'Create your operator account',
+    'setup_description' => 'This account controls the workspace. Account setup closes after you register.',
+    'check_details' => 'Check these details.',
+    'name' => 'Your name',
+    'password_hint' => 'Use at least 12 characters.',
+    'confirm_password' => 'Confirm password',
+    'create_account' => 'Create workspace account',
+    'setup_note' => 'You don’t need a separate GitHub bot account. Connect a GitHub App after setup.',
+];

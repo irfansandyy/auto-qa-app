@@ -1,0 +1,25 @@
+<?php
+
+return [
+    'skip_content' => 'Lewati ke konten',
+    'product_heading' => 'Pengujian dan',
+    'product_heading_second' => 'perbaikan situs web',
+    'product_description' => 'Kelola proyek, tinjau hasil pengujian, dan pantau usulan perbaikan.',
+    'signin_heading' => 'Masuk ke ruang kerja',
+    'signin_description' => 'Gunakan akun operator yang dibuat saat penyiapan.',
+    'signin_error' => 'Tidak dapat masuk.',
+    'email' => 'Alamat email',
+    'password' => 'Kata sandi',
+    'remember' => 'Tetap masuk',
+    'signin' => 'Masuk',
+    'repository_note' => 'Akses repositori dihubungkan secara terpisah melalui GitHub App.',
+    'setup_label' => 'Penyiapan awal',
+    'setup_heading' => 'Buat akun operator',
+    'setup_description' => 'Akun ini mengelola ruang kerja. Pendaftaran ditutup setelah akun dibuat.',
+    'check_details' => 'Periksa data berikut.',
+    'name' => 'Nama Anda',
+    'password_hint' => 'Gunakan minimal 12 karakter.',
+    'confirm_password' => 'Konfirmasi kata sandi',
+    'create_account' => 'Buat akun ruang kerja',
+    'setup_note' => 'Anda tidak memerlukan akun bot GitHub terpisah. Hubungkan GitHub App setelah penyiapan.',
+];

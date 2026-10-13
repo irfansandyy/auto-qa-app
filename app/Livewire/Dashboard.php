@@ -67,6 +67,13 @@ class Dashboard extends Component
         } else {
             $this->showingProjectForm = true;
         }
+        $this->panel = request()->query('panel') === 'settings' ? 'settings' : 'workspace';
+    }
+
+    public function hydrate(): void
+    {
+        $locale = auth()->user()?->locale;
+        app()->setLocale(in_array($locale, ['en', 'id'], true) ? $locale : 'en');
     }
 
     public function setPanel(string $panel): void
@@ -95,7 +102,7 @@ class Dashboard extends Component
     {
         $project = $this->projects()->findOrFail($id);
         if ($project->runs()->whereNotIn('status', self::TERMINAL_STATUSES)->exists()) {
-            $this->addError('run', 'Wait for the active run to finish or cancel it before editing this project.');
+            $this->addError('run', __('messages.edit_active'));
 
             return;
         }
@@ -128,11 +135,18 @@ class Dashboard extends Component
             'deployedSha' => ['nullable', 'regex:/^[a-fA-F0-9]{40}$/'],
             'repairPolicy' => ['required', Rule::in(['suggest_only', 'verified_pr'])],
         ], [
-            'repositoryUrl.regex' => 'Enter a GitHub repository URL, such as https://github.com/owner/repository.',
-            'deployedSha.regex' => 'Enter the full 40-character GitHub commit SHA deployed on your website.',
+            'repositoryUrl.regex' => __('messages.repository_url'),
+            'deployedSha.regex' => __('messages.deployed_sha'),
         ], [
-            'repositoryUrl' => 'GitHub repository', 'websiteUrl' => 'website URL',
-            'expectedBehavior' => 'expected behavior', 'goal' => 'testing goal',
+            'name' => __('messages.attributes.name'),
+            'repositoryUrl' => __('messages.attributes.repositoryUrl'),
+            'websiteUrl' => __('messages.attributes.websiteUrl'),
+            'targetMode' => __('messages.attributes.targetMode'),
+            'expectedBehavior' => __('messages.attributes.expectedBehavior'),
+            'goal' => __('messages.attributes.goal'),
+            'baseBranch' => __('messages.attributes.baseBranch'),
+            'deployedSha' => __('messages.attributes.deployedSha'),
+            'repairPolicy' => __('messages.attributes.repairPolicy'),
         ]);
 
         try {
@@ -159,7 +173,7 @@ class Dashboard extends Component
                 $project = $this->projects()->whereKey($this->editingProjectId)->lockForUpdate()->firstOrFail();
                 if ($project->runs()->whereNotIn('status', self::TERMINAL_STATUSES)->exists()) {
                     throw ValidationException::withMessages([
-                        'name' => 'Wait for the active run to finish or cancel it before changing project settings.',
+                        'name' => __('messages.change_active'),
                     ]);
                 }
                 $project->update($attributes);
@@ -171,7 +185,7 @@ class Dashboard extends Component
         }
 
         $this->selectProject($project->id);
-        $this->notice = 'Project saved. Check repository access before starting your first run.';
+        $this->notice = __('messages.project_saved');
     }
 
     public function selectProject(int $id): void
@@ -206,8 +220,8 @@ class Dashboard extends Component
                 'repository' => $repository['full_name'],
                 'can_push' => (bool) $repository['can_push'],
                 'message' => $repository['can_push']
-                    ? 'Repository is accessible with commit permission. Website address is allowed; browser reachability is checked during the run.'
-                    : 'Repository is accessible, but commit permission is missing. Check your GitHub App installation permissions.',
+                    ? __('messages.connection_ready')
+                    : __('messages.connection_readonly'),
             ];
             if (! $project->base_branch) {
                 $project->update(['base_branch' => $repository['default_branch']]);
@@ -217,7 +231,7 @@ class Dashboard extends Component
             $this->connection = [
                 'ok' => false,
                 'can_push' => false,
-                'message' => 'Connection check failed. Confirm the GitHub App is installed for this repository and the website address is allowed. The server log has details.',
+                'message' => __('messages.connection_failed'),
             ];
         }
     }
@@ -227,7 +241,7 @@ class Dashboard extends Component
         $project = $this->selectedProject();
 
         if (! app(ModelClient::class)->ready() || ! app(BrowserWorker::class)->ready()) {
-            $this->addError('run', 'Configure the browser worker and model service in Connections before starting a run.');
+            $this->addError('run', __('messages.configure_services'));
 
             return;
         }
@@ -235,7 +249,7 @@ class Dashboard extends Component
         $run = DB::transaction(function () use ($project) {
             Project::query()->whereKey($project->id)->lockForUpdate()->firstOrFail();
             if ($project->runs()->whereNotIn('status', self::TERMINAL_STATUSES)->exists()) {
-                throw ValidationException::withMessages(['run' => 'This project already has an active run. Wait for it to finish or cancel it first.']);
+                throw ValidationException::withMessages(['run' => __('messages.run_active')]);
             }
 
             return $project->runs()->create([
@@ -248,7 +262,7 @@ class Dashboard extends Component
 
         $this->selectedRunId = $run->id;
         ExecuteQaRun::dispatch($run->id);
-        $this->notice = 'Run queued. The worker will record its progress here.';
+        $this->notice = __('messages.run_queued');
         $this->resetValidation('run');
     }
 
@@ -261,7 +275,7 @@ class Dashboard extends Component
                 $run->update(['status' => 'cancelled', 'finished_at' => now()]);
             }
         });
-        $this->notice = 'Cancellation requested. The worker stops at its next checkpoint.';
+        $this->notice = __('messages.cancelled');
     }
 
     private function projects(): Builder

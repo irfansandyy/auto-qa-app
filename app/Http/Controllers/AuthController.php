@@ -38,7 +38,7 @@ class AuthController extends Controller
 
     public function register(Request $request): RedirectResponse
     {
-        abort_if(User::query()->exists(), 403, 'The operator account has already been created.');
+        abort_if(User::query()->exists(), 403, __('messages.account_created'));
 
         $request->merge(['email' => Str::lower(trim((string) $request->input('email')))]);
         $validated = $request->validate([
@@ -50,7 +50,7 @@ class AuthController extends Controller
         try {
             $user = Cache::lock('autoqa-first-operator', 10)->block(3, function () use ($validated) {
                 return DB::transaction(function () use ($validated) {
-                    abort_if(User::query()->exists(), 403, 'The operator account has already been created.');
+                    abort_if(User::query()->exists(), 403, __('messages.account_created'));
 
                     return User::query()->create([
                         'name' => $validated['name'],
@@ -61,7 +61,7 @@ class AuthController extends Controller
             });
         } catch (LockTimeoutException) {
             throw ValidationException::withMessages([
-                'email' => 'Account setup is already in progress. Please try signing in shortly.',
+                'email' => __('messages.setup_busy'),
             ]);
         }
 
@@ -82,7 +82,7 @@ class AuthController extends Controller
 
         if (RateLimiter::tooManyAttempts($key, 5)) {
             throw ValidationException::withMessages([
-                'email' => 'Too many sign-in attempts. Try again in '.RateLimiter::availableIn($key).' seconds.',
+                'email' => __('messages.signin_limited', ['seconds' => RateLimiter::availableIn($key)]),
             ]);
         }
 
@@ -90,7 +90,7 @@ class AuthController extends Controller
             RateLimiter::hit($key, 60);
 
             throw ValidationException::withMessages([
-                'email' => 'The email or password did not match.',
+                'email' => __('messages.signin_failed'),
             ]);
         }
 
