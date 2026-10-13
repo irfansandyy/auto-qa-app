@@ -1,0 +1,22 @@
+# Administrator preparation only: review the owned target's lockfile and pin base images.
+# Build context: target manifests, source.sha, public/build/, and sandbox/*.php.
+ARG PHP_IMAGE=php:8.5-cli-bookworm
+FROM ${PHP_IMAGE}
+COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends unzip libsqlite3-dev libonig-dev libxml2-dev \
+    && docker-php-ext-install pdo_sqlite mbstring dom xml simplexml \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /opt/target
+COPY target/composer.json target/composer.lock ./
+COPY target/source.sha /opt/target/source.sha
+COPY target/public/build/ /opt/target/public/build/
+RUN mkdir -p app database/factories database/seeders tests \
+    && composer --no-plugins config classmap-authoritative false \
+    && composer --no-plugins config optimize-autoloader false \
+    && composer install --no-interaction --prefer-dist --no-scripts --no-plugins --no-autoloader \
+    && composer dump-autoload --no-interaction --no-scripts --no-plugins
+COPY sandbox/runner.php sandbox/preview-router.php sandbox/http-client.php /opt/autoqa/
+WORKDIR /workspace
+USER 1000:1000
+ENTRYPOINT ["php", "/opt/autoqa/runner.php"]
