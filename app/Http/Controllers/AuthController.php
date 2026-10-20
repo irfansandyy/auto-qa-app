@@ -3,12 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
-use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
@@ -18,28 +15,18 @@ use Illuminate\View\View;
 
 class AuthController extends Controller
 {
-    public function showLogin(): View|RedirectResponse
+    public function showLogin(): View
     {
-        if (! User::query()->exists()) {
-            return redirect()->route('register');
-        }
-
         return view('auth.login');
     }
 
-    public function showRegister(): View|RedirectResponse
+    public function showRegister(): View
     {
-        if (User::query()->exists()) {
-            return redirect()->route('login');
-        }
-
         return view('auth.register');
     }
 
     public function register(Request $request): RedirectResponse
     {
-        abort_if(User::query()->exists(), 403, __('messages.account_created'));
-
         $request->merge(['email' => Str::lower(trim((string) $request->input('email')))]);
         $validated = $request->validate([
             'name' => ['required', 'string', 'min:2', 'max:100'],
@@ -47,23 +34,11 @@ class AuthController extends Controller
             'password' => ['required', 'confirmed', Password::min(12)],
         ]);
 
-        try {
-            $user = Cache::lock('autoqa-first-operator', 10)->block(3, function () use ($validated) {
-                return DB::transaction(function () use ($validated) {
-                    abort_if(User::query()->exists(), 403, __('messages.account_created'));
-
-                    return User::query()->create([
-                        'name' => $validated['name'],
-                        'email' => $validated['email'],
-                        'password' => Hash::make($validated['password']),
-                    ]);
-                });
-            });
-        } catch (LockTimeoutException) {
-            throw ValidationException::withMessages([
-                'email' => __('messages.setup_busy'),
-            ]);
-        }
+        $user = User::query()->create([
+            'name' => $validated['name'],
+            'email' => $validated['email'],
+            'password' => Hash::make($validated['password']),
+        ]);
 
         Auth::login($user);
         $request->session()->regenerate();

@@ -8,7 +8,9 @@ use App\Models\QaRun;
 use App\Services\BrowserWorker;
 use App\Services\GitHub\GitHubAppClient;
 use App\Services\ModelClient;
+use App\Services\RepositoryAccess;
 use App\Services\TargetPolicy;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
@@ -21,7 +23,7 @@ class Dashboard extends Component
 {
     public const TERMINAL_STATUSES = [
         'completed', 'failed', 'cancelled', 'blocked', 'needs_configuration',
-        'verification_failed', 'suggestion_ready', 'ready_for_review',
+        'verification_failed', 'suggestion_ready', 'ready_for_review', 'report_ready',
     ];
 
     #[Locked]
@@ -108,14 +110,14 @@ class Dashboard extends Component
         }
         $this->editingProjectId = $project->id;
         $this->name = $project->name;
-        $this->repositoryUrl = $project->repository_url;
+        $this->repositoryUrl = $project->repository_url ?? '';
         $this->websiteUrl = $project->website_url;
         $this->targetMode = $project->target_mode;
         $this->goal = $project->goal;
         $this->expectedBehavior = $project->expected_behavior;
         $this->baseBranch = $project->base_branch ?? '';
         $this->deployedSha = $project->deployed_sha ?? '';
-        $this->repairPolicy = $project->repair_policy;
+        $this->repairPolicy = $project->repair_policy === 'report_only' ? 'verified_pr' : $project->repair_policy;
         $this->showingProjectForm = true;
         $this->panel = 'workspace';
         $this->notice = null;
@@ -124,9 +126,10 @@ class Dashboard extends Component
 
     public function saveProject(TargetPolicy $targets): void
     {
+        $this->repositoryUrl = trim($this->repositoryUrl);
         $this->validate([
             'name' => ['required', 'string', 'min:2', 'max:100'],
-            'repositoryUrl' => ['required', 'url:https', 'max:500', 'regex:~^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?/?$~'],
+            'repositoryUrl' => ['nullable', 'url:https', 'max:500', 'regex:~^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?/?$~'],
             'websiteUrl' => ['required', 'url:http,https', 'max:2000'],
             'targetMode' => ['required', Rule::in(['public', 'local'])],
             'goal' => ['required', 'string', 'min:5', 'max:4000'],
@@ -158,14 +161,14 @@ class Dashboard extends Component
         $attributes = [
             'user_id' => auth()->id(),
             'name' => trim($this->name),
-            'repository_url' => rtrim($this->repositoryUrl, '/'),
+            'repository_url' => $this->repositoryUrl !== '' ? rtrim($this->repositoryUrl, '/') : null,
             'website_url' => $this->websiteUrl,
             'target_mode' => $this->targetMode,
             'goal' => trim($this->goal),
             'expected_behavior' => trim($this->expectedBehavior),
-            'base_branch' => $this->baseBranch ?: null,
-            'deployed_sha' => $this->deployedSha ? strtolower($this->deployedSha) : null,
-            'repair_policy' => $this->repairPolicy,
+            'base_branch' => $this->repositoryUrl !== '' ? ($this->baseBranch ?: null) : null,
+            'deployed_sha' => $this->repositoryUrl !== '' && $this->deployedSha ? strtolower($this->deployedSha) : null,
+            'repair_policy' => $this->repositoryUrl !== '' ? $this->repairPolicy : 'report_only',
         ];
 
         if ($this->editingProjectId) {
@@ -185,7 +188,7 @@ class Dashboard extends Component
         }
 
         $this->selectProject($project->id);
-        $this->notice = __('messages.project_saved');
+        $this->notice = $project->repository_url ? __('messages.project_saved') : __('messages.website_project_saved');
     }
 
     public function selectProject(int $id): void
@@ -214,6 +217,16 @@ class Dashboard extends Component
 
         try {
             $targets->assertAllowed($project->website_url, $project->target_mode);
+            if (blank($project->repository_url)) {
+                $this->connection = [
+                    'ok' => true,
+                    'can_push' => false,
+                    'message' => __('messages.website_connection_ready'),
+                ];
+
+                return;
+            }
+            app(RepositoryAccess::class)->assertAllowed($project->user, $project->repository_url);
             $repository = $github->inspectRepository($project->repository_url);
             $this->connection = [
                 'ok' => true,
@@ -226,6 +239,12 @@ class Dashboard extends Component
             if (! $project->base_branch) {
                 $project->update(['base_branch' => $repository['default_branch']]);
             }
+        } catch (AuthorizationException $exception) {
+            $this->connection = [
+                'ok' => false,
+                'can_push' => false,
+                'message' => $exception->getMessage(),
+            ];
         } catch (\Throwable $exception) {
             report($exception);
             $this->connection = [
@@ -240,7 +259,7 @@ class Dashboard extends Component
     {
         $project = $this->selectedProject();
 
-        if (! app(ModelClient::class)->ready() || ! app(BrowserWorker::class)->ready()) {
+        if (! app(ModelClient::class)->forUser(auth()->user())->ready() || ! app(BrowserWorker::class)->ready()) {
             $this->addError('run', __('messages.configure_services'));
 
             return;
@@ -307,7 +326,7 @@ class Dashboard extends Component
             'runs' => $runs,
             'run' => $run,
             'githubReady' => $githubReady,
-            'modelReady' => app(ModelClient::class)->ready(),
+            'modelReady' => app(ModelClient::class)->forUser(auth()->user())->ready(),
             'browserReady' => app(BrowserWorker::class)->ready(),
             'terminalStatuses' => self::TERMINAL_STATUSES,
             'installationUrl' => config('github.app_slug')

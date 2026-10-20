@@ -10,6 +10,8 @@ return [
     'repository_url' => 'Enter a GitHub repository URL, such as https://github.com/owner/repository.',
     'deployed_sha' => 'Enter the full 40-character GitHub commit SHA deployed on your website.',
     'project_saved' => 'Project saved. Check repository access before starting your first run.',
+    'website_project_saved' => 'Project saved for website testing and reports.',
+    'website_connection_ready' => 'Website address is allowed. Browser reachability is checked during the run. This project will produce a report.',
     'connection_ready' => 'Repository is accessible with commit permission. Website address is allowed; browser reachability is checked during the run.',
     'connection_readonly' => 'Repository is accessible, but commit permission is missing. Check your GitHub App installation permissions.',
     'connection_failed' => 'Connection check failed. Confirm the GitHub App is installed for this repository and the website address is allowed. The server log has details.',

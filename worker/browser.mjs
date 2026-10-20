@@ -126,6 +126,12 @@ export class BrowserManager {
     const epoch = ++session.epoch;
     const snapshot = await session.page.evaluate(({ epoch }) => {
       const short = (value, limit) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, limit);
+      const hasValue = (element) => {
+        if (['checkbox', 'radio'].includes(element.type)) return Boolean(element.checked);
+        if (element.type === 'file') return Boolean(element.files?.length);
+        if (element.tagName === 'SELECT') return [...element.selectedOptions].some((option) => option.value !== '');
+        return String(element.value ?? '').length > 0;
+      };
       for (const element of document.querySelectorAll('[data-autoqa-ref]')) element.removeAttribute('data-autoqa-ref');
       const elements = [];
       const candidates = document.querySelectorAll('a[href],button,input:not([type="hidden"]),select,textarea,[role="button"],[role="link"],[role="checkbox"],[role="radio"],[role="combobox"],[contenteditable="true"]');
@@ -143,6 +149,10 @@ export class BrowserManager {
           label: short(element.getAttribute('aria-label') || labelledBy || labels || element.getAttribute('placeholder') || element.getAttribute('title'), 160),
           text: short(element.innerText, 200), type: element.getAttribute('type') ?? '',
           disabled: Boolean(element.disabled || element.getAttribute('aria-disabled') === 'true'),
+          ...(['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName) ? {
+            required: Boolean(element.required || element.getAttribute('aria-required') === 'true'),
+            has_value: hasValue(element),
+          } : {}),
           ...(element.tagName === 'SELECT' ? { options: [...element.options].slice(0, 25).map((option) => ({ value: short(option.value, 160), text: short(option.text, 160) })) } : {}),
         });
       }

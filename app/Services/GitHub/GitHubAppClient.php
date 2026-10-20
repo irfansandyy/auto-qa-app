@@ -36,7 +36,6 @@ class GitHubAppClient
             'head_sha' => $head,
             'installation_id' => $access['installation_id'],
             'can_push' => ($access['permissions']['contents'] ?? null) === 'write'
-                && ($data['permissions']['push'] ?? true) === true
                 && ! ($data['archived'] ?? false)
                 && ! ($data['disabled'] ?? false),
         ];
@@ -179,6 +178,29 @@ class GitHubAppClient
         }
     }
 
+    public function assertPublicationAllowed(string $repositoryUrl, string $baseBranch, string $deployedSha): void
+    {
+        $this->assertRef($baseBranch);
+        $this->assertSha($deployedSha);
+        $repository = RepositoryUrl::parse($repositoryUrl);
+        $access = $this->installationAccess($repository);
+        $this->assertPermission($access, 'contents');
+        $this->assertPermission($access, 'pull_requests');
+        $data = $this->request('GET', $this->repoPath($repository), $access['token'])->json();
+        if (($data['archived'] ?? false) || ($data['disabled'] ?? false)) {
+            throw new RuntimeException('The selected repository is archived or disabled. Enable an active demonstration repository before publishing.');
+        }
+        $response = $this->request('GET', $this->repoPath($repository).'/git/ref/heads/'.rawurlencode($baseBranch), $access['token'], [], [200, 404]);
+        if ($response->status() === 404) {
+            throw new RuntimeException('The selected pull request base branch does not exist. Correct the project base branch before publishing.');
+        }
+        $head = $response->json('object.sha');
+        $this->assertSha($head);
+        if (strcasecmp($head, $deployedSha) !== 0) {
+            throw new RuntimeException('The selected base branch no longer matches the verified deployed commit. Deploy the current source and refresh the deployed commit before publishing a repair.');
+        }
+    }
+
     /** @return array{branch: string, sha: string} */
     public function commitRepair(string $repositoryUrl, string $baseSha, string $branchName, array $files, string $message): array
     {
@@ -192,6 +214,7 @@ class GitHubAppClient
         $repository = RepositoryUrl::parse($repositoryUrl);
         $access = $this->installationAccess($repository);
         $this->assertPermission($access, 'contents');
+        $this->assertPermission($access, 'pull_requests');
         $repo = $this->repoPath($repository);
         $existing = $this->request('GET', $repo.'/git/ref/heads/'.rawurlencode($branchName), $access['token'], [], [200, 404]);
         if ($existing->status() !== 404) {
@@ -212,9 +235,8 @@ class GitHubAppClient
 
         $tree = $this->request('POST', "$repo/git/trees", $access['token'], ['base_tree' => $baseTree, 'tree' => $entries])->json('sha');
         $this->assertSha($tree);
-        $author = $this->botAuthor($access['token']);
         $commit = $this->request('POST', "$repo/git/commits", $access['token'], [
-            'message' => $message, 'tree' => $tree, 'parents' => [$baseSha], 'author' => $author, 'committer' => $author,
+            'message' => $message, 'tree' => $tree, 'parents' => [$baseSha],
         ])->json('sha');
         $this->assertSha($commit);
         $this->request('POST', "$repo/git/refs", $access['token'], ['ref' => 'refs/heads/'.$branchName, 'sha' => $commit]);
@@ -353,22 +375,6 @@ class GitHubAppClient
         }
 
         return $response;
-    }
-
-    private function botAuthor(string $token): array
-    {
-        $app = $this->request('GET', '/app', $this->jwt())->json();
-        $slug = $app['slug'] ?? '';
-        if (! is_string($slug) || ! preg_match('/^[a-z0-9-]+$/D', $slug)) {
-            throw new RuntimeException('GitHub did not return a valid App identity for commit attribution.');
-        }
-        $login = $slug.'[bot]';
-        $user = $this->request('GET', '/users/'.rawurlencode($login), $token)->json();
-        if (($user['login'] ?? null) !== $login || ! is_numeric($user['id'] ?? null) || (int) $user['id'] <= 0) {
-            throw new RuntimeException('The GitHub App bot identity could not be verified. Install the App before creating a repair commit.');
-        }
-
-        return ['name' => $login, 'email' => $user['id'].'+'.$login.'@users.noreply.github.com'];
     }
 
     private function fileMode(string $repo, string $rootTree, string $path, string $token, array &$trees): string

@@ -34,6 +34,7 @@
                 <label class="check-label"><input type="checkbox" name="remember" value="1" {{ old('remember') ? 'checked' : '' }}> {{ __('auth-ui.remember') }}</label>
                 <button class="button button-primary button-full" type="submit">{{ __('auth-ui.signin') }}</button>
             </form>
+            <p class="auth-note">{{ __('auth-ui.need_account') }} <a href="{{ route('register') }}">{{ __('auth-ui.signup') }}</a></p>
             <p class="auth-note">{{ __('auth-ui.repository_note') }}</p>
         </div>
     </section>

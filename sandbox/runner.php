@@ -258,6 +258,15 @@ function copyDependencies(): void
 
 function validateAndApply(array $payload, string $phase): void
 {
+    if ($phase === 'baseline_preview') {
+        if (! array_key_exists('files', $payload) || $payload['files'] !== []
+            || ! array_key_exists('test', $payload) || $payload['test'] !== ''
+            || ($payload['patch_sha256'] ?? null) !== hash('sha256', '[]')) {
+            throw new RuntimeException('A baseline preview requires an explicitly empty patch, no regression file, and the exact empty-patch identity.');
+        }
+
+        return;
+    }
     $files = $payload['files'] ?? [];
     $test = $payload['test'] ?? '';
     if (! is_array($files) || count($files) < 1 || count($files) > 5 || ! is_string($test)
@@ -399,7 +408,7 @@ function testResult(array $payload, string $phase): array
 $phase = $argv[1] ?? '';
 $payload = [];
 try {
-    if (! in_array($phase, ['baseline_suite', 'baseline_regression_assertion', 'patched_regression', 'patched_suite', 'preview'], true)
+    if (! in_array($phase, ['baseline_suite', 'baseline_regression_assertion', 'patched_regression', 'patched_suite', 'preview', 'baseline_preview'], true)
         || filesize('/input/payload.json') > 131072) {
         throw new RuntimeException('The trusted runner input is invalid.');
     }
@@ -416,7 +425,7 @@ try {
     copyDependencies();
     validateAndApply($payload, $phase);
     prepareRuntime($payload);
-    if ($phase === 'preview') {
+    if (in_array($phase, ['preview', 'baseline_preview'], true)) {
         if (boundedProcess([PHP_BINARY, WORKSPACE.'/artisan', 'migrate', '--force', '--seed', '--no-interaction'], 60)['exit'] !== 0) {
             throw new RuntimeException('The isolated preview fixtures could not be migrated and seeded.');
         }

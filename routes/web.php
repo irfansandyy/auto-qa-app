@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\EvidenceController;
+use App\Http\Controllers\ModelSettingsController;
 use App\Http\Controllers\PreferencesController;
 use App\Livewire\Dashboard;
 use Illuminate\Support\Facades\Route;
@@ -16,6 +17,7 @@ Route::middleware('guest')->group(function () {
 });
 
 Route::middleware('auth')->group(function () {
+    Route::post('/settings/model', [ModelSettingsController::class, 'update'])->name('settings.model');
     Route::post('/settings/preferences', PreferencesController::class)->name('settings.preferences');
     Route::get('/dashboard', Dashboard::class)->name('dashboard');
     Route::get('/runs/{run}/evidence/{filename}', EvidenceController::class)

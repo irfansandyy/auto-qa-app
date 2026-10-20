@@ -72,6 +72,7 @@ class ExecuteQaRunTest extends TestCase
             'cancelled' => ['cancelled'], 'completed' => ['completed'], 'blocked' => ['blocked'],
             'configuration required' => ['needs_configuration'], 'suggestion ready' => ['suggestion_ready'],
             'verification failed' => ['verification_failed'], 'draft PR ready' => ['ready_for_review'], 'already failed' => ['failed'],
+            'website report ready' => ['report_ready'],
         ];
     }
 

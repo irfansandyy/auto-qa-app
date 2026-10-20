@@ -19,6 +19,7 @@ class ModelClientTest extends TestCase
         config()->set('autoqa.model_url', 'http://127.0.0.1:11434/v1');
         config()->set('autoqa.model_name', 'qa-test-model');
         config()->set('autoqa.model_key', 'private-model-test-key');
+        config()->set('autoqa.model_reasoning_effort', null);
         Http::preventStrayRequests();
     }
 
@@ -47,6 +48,112 @@ class ModelClientTest extends TestCase
         return [
             'plain JSON' => ['{"tool":"assert_text","text":"Welcome"}'],
             'thinking and fenced JSON' => ["<think>Reasoning is removed.</think>\n```json\n{\"tool\":\"assert_text\",\"text\":\"Welcome\"}\n```"],
+        ];
+    }
+
+    public function test_model_context_exposes_plain_repository_paths_and_urls_without_changing_the_context_or_leaking_authentication(): void
+    {
+        $path = 'app/Http/Controllers/RegistrationController.php';
+        $url = 'http://127.0.0.1:8082/register?next=%2Fdashboard';
+        $context = ['tree' => [['path' => $path, 'size' => 1200]], 'page' => ['url' => $url]];
+        Http::fake([self::ENDPOINT => Http::response(['choices' => [['message' => ['content' => '{"files":["app/Http/Controllers/RegistrationController.php"]}'], 'finish_reason' => 'stop']]])]);
+
+        $decision = (new ModelClient)->decide('Choose relevant existing repository files.', $context);
+
+        $this->assertSame(['files' => [$path]], $decision);
+        Http::assertSentCount(1);
+        $request = Http::recorded()->first()[0];
+        $prompt = $request['messages'][1]['content'];
+        $this->assertStringContainsString($path, $prompt);
+        $this->assertStringContainsString($url, $prompt);
+        $this->assertStringNotContainsString('\\/', $prompt);
+        $this->assertSame($context, json_decode($prompt, true, flags: JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('private-model-test-key', json_encode($request->data(), JSON_THROW_ON_ERROR));
+    }
+
+    #[DataProvider('requestDeadlines')]
+    public function test_forwards_a_bounded_optional_deadline_without_changing_the_configured_default(int $configured, ?int $timeout, int $expected): void
+    {
+        config()->set('autoqa.model_timeout', $configured);
+        $observed = null;
+        Http::fake([self::ENDPOINT => function (Request $request, array $options) use (&$observed): array {
+            $observed = $options['timeout'];
+
+            return ['choices' => [['message' => ['content' => '{"tool":"assert_text","text":"Welcome"}'], 'finish_reason' => 'stop']]];
+        }]);
+        $client = new ModelClient;
+
+        $result = $timeout === null ? $client->decide('Check registration.', []) : $client->decide('Propose the source repair.', [], $timeout);
+
+        $this->assertSame($expected, $observed);
+        $this->assertSame($configured, config('autoqa.model_timeout'));
+        $this->assertSame(['tool' => 'assert_text', 'text' => 'Welcome'], $result);
+        Http::assertSentCount(1);
+        Http::assertSent(fn (Request $request) => $request->url() === self::ENDPOINT
+            && ! array_key_exists('timeout', $request->data())
+            && $request['temperature'] === 0.7 && $request['max_tokens'] === 6144
+            && $request['response_format'] === ['type' => 'json_object']);
+    }
+
+    public static function requestDeadlines(): array
+    {
+        return [
+            'ordinary two argument call' => [180, null, 180],
+            'repair override' => [180, 600, 600],
+            'minimum override' => [180, 1, 1],
+            'zero override is bounded' => [180, 0, 1],
+            'negative override is bounded' => [180, -30, 1],
+            'maximum override' => [180, 900, 900],
+            'overlong override is bounded' => [180, 1200, 900],
+            'configured default is also bounded' => [1200, null, 900],
+        ];
+    }
+
+    #[DataProvider('reasoningEfforts')]
+    public function test_sends_the_configured_bounded_reasoning_level(string $reasoningEffort): void
+    {
+        config()->set('autoqa.model_reasoning_effort', $reasoningEffort);
+        Http::fake([self::ENDPOINT => Http::response(['choices' => [['message' => ['content' => '{"tool":"assert_text","text":"Welcome"}'], 'finish_reason' => 'stop']]])]);
+
+        (new ModelClient)->decide('Check registration.', []);
+
+        Http::assertSent(fn (Request $request) => $request->url() === self::ENDPOINT
+            && $request['reasoning_effort'] === $reasoningEffort
+            && $request['temperature'] === 0.7
+            && $request['max_tokens'] === 6144
+            && $request['response_format'] === ['type' => 'json_object']);
+    }
+
+    public static function reasoningEfforts(): array
+    {
+        return [
+            'disable thinking' => ['none'],
+            'named compatibility level' => ['low'],
+            'model-defined level' => ['balanced'],
+        ];
+    }
+
+    #[DataProvider('omittedReasoningEfforts')]
+    public function test_omits_reasoning_effort_when_unset_or_invalid(mixed $reasoningEffort): void
+    {
+        config()->set('autoqa.model_reasoning_effort', $reasoningEffort);
+        Http::fake([self::ENDPOINT => Http::response(['choices' => [['message' => ['content' => '{"tool":"assert_text","text":"Welcome"}'], 'finish_reason' => 'stop']]])]);
+
+        (new ModelClient)->decide('Check registration.', []);
+
+        Http::assertSent(fn (Request $request) => $request->url() === self::ENDPOINT
+            && ! array_key_exists('reasoning_effort', $request->data()));
+    }
+
+    public static function omittedReasoningEfforts(): array
+    {
+        return [
+            'unset' => [null],
+            'blank' => [''],
+            'whitespace' => ['none '],
+            'non-string' => [false],
+            'structured value' => [['effort' => 'none']],
+            'overlong' => [str_repeat('a', 33)],
         ];
     }
 

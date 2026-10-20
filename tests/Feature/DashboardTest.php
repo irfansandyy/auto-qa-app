@@ -7,6 +7,7 @@ use App\Livewire\Dashboard;
 use App\Models\Project;
 use App\Models\QaRun;
 use App\Models\User;
+use App\Services\GitHub\GitHubAppClient;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
@@ -71,12 +72,104 @@ class DashboardTest extends TestCase
         ]);
     }
 
-    public function test_project_requires_repository_website_goal_and_expected_behavior(): void
+    public function test_project_requires_website_goal_and_expected_behavior(): void
     {
         $operator = User::factory()->create();
 
         Livewire::actingAs($operator)->test(Dashboard::class)
-            ->call('saveProject')->assertHasErrors(['name', 'repositoryUrl', 'websiteUrl', 'goal', 'expectedBehavior']);
+            ->call('saveProject')->assertHasErrors(['name', 'websiteUrl', 'goal', 'expectedBehavior']);
+
+        $this->assertDatabaseCount('projects', 0);
+    }
+
+    public function test_website_only_project_saves_without_source_binding_and_queues_a_report_run(): void
+    {
+        $operator = User::factory()->create();
+        Queue::fake([ExecuteQaRun::class]);
+
+        Livewire::actingAs($operator)->test(Dashboard::class)
+            ->set('name', 'Website check')
+            ->set('websiteUrl', 'http://127.0.0.1:9000/register')
+            ->set('targetMode', 'local')
+            ->set('goal', 'Check the registration form.')
+            ->set('expectedBehavior', 'Registration succeeds without a phone number.')
+            ->set('baseBranch', 'main')
+            ->set('deployedSha', str_repeat('b', 40))
+            ->call('saveProject')->assertHasNoErrors()
+            ->assertSee('Test and report')
+            ->assertDontSee('The deployed commit is not recorded.')
+            ->call('startRun')->assertHasNoErrors();
+
+        $project = Project::query()->sole();
+        $this->assertDatabaseHas('projects', [
+            'id' => $project->id, 'user_id' => $operator->id,
+            'repository_url' => null, 'repair_policy' => 'report_only',
+            'base_branch' => null, 'deployed_sha' => null,
+        ]);
+        $this->assertDatabaseHas('qa_runs', [
+            'project_id' => $project->id, 'status' => 'queued', 'base_sha' => null,
+        ]);
+        Queue::assertPushed(ExecuteQaRun::class, 1);
+    }
+
+    public function test_website_only_connection_check_does_not_contact_github(): void
+    {
+        $operator = User::factory()->create();
+        Project::factory()->for($operator)->local()->create([
+            'repository_url' => null, 'website_url' => 'http://127.0.0.1:9000/register',
+            'repair_policy' => 'report_only',
+        ]);
+        $this->mock(GitHubAppClient::class)->shouldNotReceive('inspectRepository');
+
+        Livewire::actingAs($operator)->test(Dashboard::class)
+            ->call('checkConnection')->assertHasNoErrors()
+            ->assertSet('connection.ok', true)
+            ->assertSee('This project will produce a report.');
+    }
+
+    public function test_a_website_only_project_can_add_a_repository_and_remove_it_again(): void
+    {
+        $operator = User::factory()->create();
+        $project = Project::factory()->for($operator)->local()->create([
+            'repository_url' => null, 'website_url' => 'http://127.0.0.1:9000/register',
+            'repair_policy' => 'report_only',
+        ]);
+
+        $component = Livewire::actingAs($operator)->test(Dashboard::class)
+            ->call('editProject', $project->id)->assertSet('repositoryUrl', '')
+            ->set('repositoryUrl', 'https://github.com/example/portal')
+            ->set('deployedSha', str_repeat('c', 40))
+            ->call('saveProject')->assertHasNoErrors();
+
+        $this->assertDatabaseHas('projects', [
+            'id' => $project->id, 'repository_url' => 'https://github.com/example/portal',
+            'repair_policy' => 'verified_pr', 'deployed_sha' => str_repeat('c', 40),
+        ]);
+
+        $component->call('editProject', $project->id)
+            ->set('repositoryUrl', '   ')
+            ->call('saveProject')->assertHasNoErrors();
+
+        $this->assertDatabaseHas('projects', [
+            'id' => $project->id, 'repository_url' => null,
+            'repair_policy' => 'report_only', 'deployed_sha' => null,
+        ]);
+        $this->assertDatabaseCount('projects', 1);
+    }
+
+    public function test_a_nonempty_repository_must_still_be_a_github_url(): void
+    {
+        $operator = User::factory()->create();
+
+        Livewire::actingAs($operator)->test(Dashboard::class)
+            ->set('name', 'Website check')
+            ->set('repositoryUrl', 'https://gitlab.com/example/portal')
+            ->set('websiteUrl', 'http://127.0.0.1:9000/register')
+            ->set('targetMode', 'local')
+            ->set('goal', 'Check registration.')
+            ->set('expectedBehavior', 'Registration succeeds.')
+            ->call('saveProject')->assertHasErrors('repositoryUrl')
+            ->assertSee('Enter a GitHub repository URL');
 
         $this->assertDatabaseCount('projects', 0);
     }
@@ -195,6 +288,7 @@ class DashboardTest extends TestCase
     #[TestWith(['verification_failed'])]
     #[TestWith(['suggestion_ready'])]
     #[TestWith(['ready_for_review'])]
+    #[TestWith(['report_ready'])]
     public function test_finished_attempt_does_not_block_a_new_run(string $status): void
     {
         $operator = User::factory()->create();
@@ -222,6 +316,22 @@ class DashboardTest extends TestCase
 
         $this->assertDatabaseCount('qa_runs', 0);
         Queue::assertNothingPushed();
+    }
+
+    public function test_an_operator_can_queue_with_their_api_when_the_local_model_is_not_configured(): void
+    {
+        $operator = User::factory()->create([
+            'model_provider' => 'openai', 'model_name' => 'test-model', 'model_api_key' => 'owner-key',
+        ]);
+        Project::factory()->for($operator)->create();
+        config(['autoqa.model_url' => '']);
+        Queue::fake([ExecuteQaRun::class]);
+
+        Livewire::actingAs($operator)->test(Dashboard::class)
+            ->call('startRun')->assertHasNoErrors();
+
+        $this->assertDatabaseCount('qa_runs', 1);
+        Queue::assertPushed(ExecuteQaRun::class, 1);
     }
 
     public function test_cancel_records_operator_owned_run_as_cancelled(): void

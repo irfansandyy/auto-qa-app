@@ -1,5 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile, spawn } from 'node:child_process';
+import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { createServer } from '../server.mjs';
 import { PolicyError } from '../policy.mjs';
 
@@ -23,6 +29,55 @@ async function withServer(callback, overrides = {}) {
 
 test('worker requires a long secret before it can start', () => {
   assert.throws(() => createServer({ token: '', manager: {} }), /at least 24/);
+});
+
+test('worker startup loads the configured browser cache before Playwright resolves its executable', { timeout: 15000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'autoqa-worker-startup-'));
+  const workerDirectory = join(directory, 'worker');
+  const sourceDirectory = fileURLToPath(new URL('../', import.meta.url));
+  const cacheDirectory = join(directory, 'browser-cache');
+  const environment = { ...process.env };
+  for (const key of ['PLAYWRIGHT_BROWSERS_PATH', 'PLAYWRIGHT_EXECUTABLE_PATH', 'BROWSER_WORKER_HOST', 'BROWSER_WORKER_PORT', 'BROWSER_WORKER_TOKEN']) delete environment[key];
+  let child;
+  const reserve = createServer({ token, manager: {} });
+  try {
+    await mkdir(workerDirectory);
+    await Promise.all(['runner.mjs', 'policy.mjs', 'browser.mjs', 'server.mjs'].map((filename) => copyFile(join(sourceDirectory, filename), join(workerDirectory, filename))));
+    await symlink(join(sourceDirectory, 'node_modules'), join(workerDirectory, 'node_modules'), 'dir');
+    const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', "import { chromium } from 'playwright'; process.stdout.write(chromium.executablePath());"], {
+      cwd: workerDirectory, env: { ...environment, PLAYWRIGHT_BROWSERS_PATH: cacheDirectory },
+    });
+    await mkdir(dirname(stdout), { recursive: true });
+    await writeFile(stdout, 'browser cache health-check fixture');
+    await new Promise((resolve) => reserve.listen(0, '127.0.0.1', resolve));
+    const port = reserve.address().port;
+    await new Promise((resolve) => reserve.close(resolve));
+    await writeFile(join(directory, '.env'), `PLAYWRIGHT_BROWSERS_PATH=${cacheDirectory}\nBROWSER_WORKER_TOKEN=${token}\nBROWSER_WORKER_HOST=127.0.0.1\nBROWSER_WORKER_PORT=${port}\n`);
+    child = spawn(process.execPath, [join(workerDirectory, 'runner.mjs')], { cwd: workerDirectory, env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
+    let diagnostics = '';
+    child.stderr.on('data', (chunk) => { diagnostics += chunk; });
+    await new Promise((resolve, reject) => {
+      const deadline = setTimeout(() => reject(new Error('The isolated worker did not become ready.')), 8000);
+      child.once('error', (error) => { clearTimeout(deadline); reject(error); });
+      child.once('exit', (code) => { clearTimeout(deadline); reject(new Error(`The isolated worker exited with ${code}: ${diagnostics}`)); });
+      child.stdout.on('data', (chunk) => {
+        if (String(chunk).includes('Private Auto QA browser worker ready')) { clearTimeout(deadline); resolve(); }
+      });
+    });
+    const response = await fetch(`http://127.0.0.1:${port}/health`, { headers: { authorization: `Bearer ${token}` } });
+    assert.equal(response.status, 200);
+    const health = await response.json();
+    assert.equal(health.ready, true);
+    assert.equal(health.browser_installed, true);
+  } finally {
+    if (reserve.listening) await new Promise((resolve) => reserve.close(resolve));
+    if (child && child.exitCode === null && child.signalCode === null) {
+      const stopped = new Promise((resolve) => child.once('exit', resolve));
+      child.kill('SIGTERM');
+      await stopped;
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('health and session endpoints both require the exact bearer token', async () => {

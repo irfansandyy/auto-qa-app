@@ -4,8 +4,7 @@ ARG PHP_IMAGE=php:8.5-cli-bookworm
 FROM ${PHP_IMAGE}
 COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends unzip libsqlite3-dev libonig-dev libxml2-dev \
-    && docker-php-ext-install pdo_sqlite mbstring dom xml simplexml \
+    && apt-get install -y --no-install-recommends unzip \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/target
 COPY target/composer.json target/composer.lock ./

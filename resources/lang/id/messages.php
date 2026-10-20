@@ -10,6 +10,8 @@ return [
     'repository_url' => 'Masukkan URL repositori GitHub, misalnya https://github.com/owner/repository.',
     'deployed_sha' => 'Masukkan SHA commit GitHub lengkap sepanjang 40 karakter yang digunakan pada situs web.',
     'project_saved' => 'Proyek disimpan. Periksa akses repositori sebelum memulai pengujian pertama.',
+    'website_project_saved' => 'Proyek disimpan untuk pengujian situs dan laporan.',
+    'website_connection_ready' => 'Alamat situs diizinkan. Keterjangkauan browser diperiksa saat pengujian berlangsung. Proyek ini akan menghasilkan laporan.',
     'connection_ready' => 'Repositori dapat diakses dengan izin commit. Alamat situs diizinkan; keterjangkauan diperiksa saat pengujian berlangsung.',
     'connection_readonly' => 'Repositori dapat diakses, tetapi izin commit belum tersedia. Periksa izin instalasi GitHub App.',
     'connection_failed' => 'Pemeriksaan koneksi gagal. Pastikan GitHub App terpasang untuk repositori ini dan alamat situs diizinkan. Detail tersedia di log server.',

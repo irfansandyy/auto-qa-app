@@ -1,4 +1,3 @@
-import { chromium } from 'playwright';
 import { createTargetPolicy, parseLocalTargets } from './policy.mjs';
 import { BrowserManager } from './browser.mjs';
 import { createServer } from './server.mjs';
@@ -6,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 
 try { process.loadEnvFile(fileURLToPath(new URL('../.env', import.meta.url))); }
 catch (error) { if (error.code !== 'ENOENT') throw error; }
+
+const { chromium } = await import('playwright');
 
 const host = process.env.BROWSER_WORKER_HOST ?? '127.0.0.1';
 if (!['127.0.0.1', '::1'].includes(host)) throw new Error('The private browser worker must listen on a loopback address.');

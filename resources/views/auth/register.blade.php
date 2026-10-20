@@ -9,11 +9,10 @@
             <p>{{ __('auth-ui.product_description') }}</p>
         </div>
     </div>
-    <section class="auth-form-wrap" aria-labelledby="setup-heading">
+    <section class="auth-form-wrap" aria-labelledby="signup-heading">
         <div class="auth-card">
-            <span class="eyebrow">{{ __('auth-ui.setup_label') }}</span>
-            <h2 id="setup-heading">{{ __('auth-ui.setup_heading') }}</h2>
-            <p class="muted">{{ __('auth-ui.setup_description') }}</p>
+            <h2 id="signup-heading">{{ __('auth-ui.signup_heading') }}</h2>
+            <p class="muted">{{ __('auth-ui.signup_description') }}</p>
             @if ($errors->any())
                 <div class="notice notice-error" role="alert" tabindex="-1" x-data x-init="$el.focus()">
                     <strong>{{ __('auth-ui.check_details') }}</strong>
@@ -44,7 +43,7 @@
                 </div>
                 <button class="button button-primary button-full" type="submit">{{ __('auth-ui.create_account') }}</button>
             </form>
-            <p class="auth-note">{{ __('auth-ui.setup_note') }}</p>
+            <p class="auth-note">{{ __('auth-ui.have_account') }} <a href="{{ route('login') }}">{{ __('auth-ui.signin') }}</a></p>
         </div>
     </section>
 </main>

@@ -15,7 +15,10 @@ const fixtureHtml = `<!doctype html>
 <body>
   <h1>Registration</h1>
   <form id="registration">
-    <label for="name">Name</label><input id="name" name="name" type="text">
+    <label for="name">Name</label><input id="name" name="name" type="text" required>
+    <label for="password">Password</label><input id="password" name="password" type="password" required>
+    <label for="notes">Notes</label><textarea id="notes" name="notes"></textarea>
+    <label for="plan">Plan</label><select id="plan" name="plan" required><option value="">Choose a plan</option><option value="basic">Basic</option></select>
     <button type="submit">Create account</button>
   </form>
   <p id="typing">Typing:</p><p id="result"></p>
@@ -65,12 +68,42 @@ test('real Chromium completes an owned form journey, records evidence, and obser
     assert.equal(started.snapshot.source_sha, sourceSha);
     const name = started.snapshot.elements.find((element) => element.label === 'Name');
     assert.ok(name, 'The worker discovers the visible input by its associated label.');
+    assert.equal(name.required, true);
+    assert.equal(name.has_value, false);
+    const emptyPassword = started.snapshot.elements.find((element) => element.label === 'Password');
+    assert.equal(emptyPassword.required, true);
+    assert.equal(emptyPassword.has_value, false);
+    const notes = started.snapshot.elements.find((element) => element.label === 'Notes');
+    assert.equal(notes.required, false);
+    assert.equal(notes.has_value, false);
+    const plan = started.snapshot.elements.find((element) => element.label === 'Plan');
+    assert.equal(plan.required, true);
+    assert.equal(plan.has_value, false);
 
     const filled = await manager.act(sessionId, { tool: 'fill', id: name.id, value: 'Alice' });
     assert.match(filled.snapshot.text, /Typing: Alice/);
-    assert.notEqual(filled.snapshot.elements.find((element) => element.label === 'Name').id, name.id);
+    const filledName = filled.snapshot.elements.find((element) => element.label === 'Name');
+    assert.equal(filledName.required, true);
+    assert.equal(filledName.has_value, true);
+    assert.notEqual(filledName.id, name.id);
     await assert.rejects(manager.act(sessionId, { tool: 'fill', id: name.id, value: 'Stale action' }), /stale/);
-    const submit = filled.snapshot.elements.find((element) => element.tag === 'button' && element.text === 'Create account');
+    const password = filled.snapshot.elements.find((element) => element.label === 'Password');
+    const secret = 'Owned-test-password-2026';
+    const passwordFilled = await manager.act(sessionId, { tool: 'fill', id: password.id, value: secret });
+    const passwordState = passwordFilled.snapshot.elements.find((element) => element.label === 'Password');
+    assert.equal(passwordState.required, true);
+    assert.equal(passwordState.has_value, true);
+    assert.notEqual(passwordState.id, password.id);
+    assert.equal(Object.hasOwn(passwordState, 'value'), false);
+    assert.equal(JSON.stringify(passwordFilled.snapshot).includes(secret), false, 'Filled password values never appear in the browser snapshot.');
+    const currentNotes = passwordFilled.snapshot.elements.find((element) => element.label === 'Notes');
+    const notesFilled = await manager.act(sessionId, { tool: 'fill', id: currentNotes.id, value: 'Owned fixture note' });
+    assert.equal(notesFilled.snapshot.elements.find((element) => element.label === 'Notes').has_value, true);
+    const currentPlan = notesFilled.snapshot.elements.find((element) => element.label === 'Plan');
+    const selected = await manager.act(sessionId, { tool: 'select', id: currentPlan.id, value: 'basic' });
+    assert.equal(selected.snapshot.elements.find((element) => element.label === 'Plan').has_value, true);
+    assert.equal(JSON.stringify(selected.snapshot).includes(secret), false);
+    const submit = selected.snapshot.elements.find((element) => element.tag === 'button' && element.text === 'Create account');
     assert.ok(submit, 'The refreshed snapshot identifies the submit control.');
 
     const clicked = await manager.act(sessionId, { tool: 'click', id: submit.id });

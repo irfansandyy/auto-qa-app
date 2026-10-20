@@ -87,6 +87,103 @@ class GitHubAppClientTest extends TestCase
         $this->assertFalse((new GitHubAppClient)->inspectRepository(self::REPOSITORY)['can_push']);
     }
 
+    public function test_app_installation_grants_allow_publication_without_a_generic_repository_push_role(): void
+    {
+        $this->fakeApi(['GET /repos/student/demo' => ['default_branch' => 'main', 'permissions' => ['push' => false]]]);
+        $client = new GitHubAppClient;
+
+        $repository = $client->inspectRepository(self::REPOSITORY);
+        $client->assertPublicationAllowed(self::REPOSITORY, 'main', self::BASE);
+
+        $this->assertTrue($repository['can_push']);
+        Http::assertSent(fn (Request $request) => $request->method() === 'GET' && str_ends_with($request->url(), '/git/ref/heads/main'));
+        Http::assertNotSent(fn (Request $request) => $request->method() === 'POST' && str_contains($request->url(), '/git/'));
+    }
+
+    #[DataProvider('inactiveRepositoryStates')]
+    public function test_archived_or_disabled_repositories_cannot_publish_repairs(string $state): void
+    {
+        $this->fakeApi(['GET /repos/student/demo' => ['default_branch' => 'main', 'permissions' => ['push' => true], $state => true]]);
+        $client = new GitHubAppClient;
+        $this->assertFalse($client->inspectRepository(self::REPOSITORY)['can_push']);
+
+        try {
+            $client->assertPublicationAllowed(self::REPOSITORY, 'main', self::BASE);
+            $this->fail('Expected an inactive repository to be refused before publication.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('archived or disabled', $exception->getMessage());
+            Http::assertNotSent(fn (Request $request) => $request->method() === 'POST' && str_contains($request->url(), '/git/'));
+        }
+    }
+
+    public static function inactiveRepositoryStates(): array
+    {
+        return [['archived'], ['disabled']];
+    }
+
+    #[DataProvider('publicationPermissions')]
+    public function test_publication_rejects_missing_write_permissions_before_any_git_mutation(array $permissions, string $method, string $missingPermission): void
+    {
+        $this->fakeApi(['POST /app/installations/42/access_tokens' => [
+            'token' => 'installation-token', 'expires_at' => gmdate('c', time() + 3600), 'permissions' => $permissions,
+        ]]);
+        $client = new GitHubAppClient;
+        try {
+            if ($method === 'preflight') {
+                $client->assertPublicationAllowed(self::REPOSITORY, 'main', self::BASE);
+            } else {
+                $client->commitRepair(self::REPOSITORY, self::BASE, 'agent/fix-demo', ['app/Foo.php' => 'fixed'], 'Fix registration');
+            }
+            $this->fail('Expected missing publication permission to be rejected.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString($missingPermission, $exception->getMessage());
+            Http::assertNotSent(fn (Request $request) => $request->method() === 'POST' && str_contains($request->url(), '/git/'));
+        }
+    }
+
+    public static function publicationPermissions(): array
+    {
+        return [
+            'preflight requires contents write' => [['contents' => 'read', 'pull_requests' => 'write'], 'preflight', 'Contents'],
+            'preflight requires pull requests write' => [['contents' => 'write', 'pull_requests' => 'read'], 'preflight', 'Pull requests'],
+            'commit requires contents write' => [['contents' => 'read', 'pull_requests' => 'write'], 'commit', 'Contents'],
+            'commit requires pull requests write' => [['contents' => 'write', 'pull_requests' => 'read'], 'commit', 'Pull requests'],
+        ];
+    }
+
+    #[DataProvider('invalidPublicationBases')]
+    public function test_publication_rejects_a_missing_or_changed_selected_base_before_any_git_mutation(bool $missing, string $message): void
+    {
+        $this->fakeApi(['GET /repos/student/demo/git/ref/heads/release/demo' => $missing
+            ? Http::response([], 404) : ['object' => ['sha' => self::COMMIT]]]);
+        try {
+            (new GitHubAppClient)->assertPublicationAllowed(self::REPOSITORY, 'release/demo', self::BASE);
+            $this->fail('Expected an unverified publication base to be rejected.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString($message, $exception->getMessage());
+            Http::assertSent(fn (Request $request) => rawurldecode($request->url()) === 'https://api.github.com/repos/student/demo/git/ref/heads/release/demo');
+            Http::assertNotSent(fn (Request $request) => $request->method() === 'POST' && str_contains($request->url(), '/git/'));
+        }
+    }
+
+    public static function invalidPublicationBases(): array
+    {
+        return [
+            'missing selected branch' => [true, 'does not exist'],
+            'advanced selected branch' => [false, 'no longer matches the verified deployed commit'],
+        ];
+    }
+
+    public function test_publication_preflight_uses_the_selected_matching_branch(): void
+    {
+        $this->fakeApi(['GET /repos/student/demo/git/ref/heads/release/demo' => ['object' => ['sha' => self::BASE]]]);
+
+        (new GitHubAppClient)->assertPublicationAllowed(self::REPOSITORY, 'release/demo', self::BASE);
+
+        Http::assertSent(fn (Request $request) => rawurldecode($request->url()) === 'https://api.github.com/repos/student/demo/git/ref/heads/release/demo');
+        Http::assertNotSent(fn (Request $request) => $request->method() === 'POST' && str_contains($request->url(), '/git/'));
+    }
+
     public function test_missing_credentials_fail_before_any_http_request(): void
     {
         config()->set('github.app_id', '');
@@ -117,17 +214,18 @@ class GitHubAppClientTest extends TestCase
         Http::assertNotSent(fn (Request $request) => str_contains($request->url(), '.env') || str_contains($request->url(), 'credentials') || str_contains($request->url(), '.pem'));
     }
 
-    public function test_commits_a_bounded_repair_to_one_new_branch_as_the_app_bot(): void
+    public function test_commits_a_bounded_repair_to_one_new_branch_with_github_managed_bot_attribution(): void
     {
         $this->fakeApi();
+        $client = new GitHubAppClient;
+        $client->assertPublicationAllowed(self::REPOSITORY, 'main', self::BASE);
 
-        $result = (new GitHubAppClient)->commitRepair(self::REPOSITORY, self::BASE, 'agent/fix-registration', ['app/Registration.php' => '<?php // fixed'], 'Fix optional phone registration');
+        $result = $client->commitRepair(self::REPOSITORY, self::BASE, 'agent/fix-registration', ['app/Registration.php' => '<?php // fixed'], 'Fix optional phone registration');
 
         $this->assertSame(['branch' => 'agent/fix-registration', 'sha' => self::COMMIT], $result);
         Http::assertSent(fn (Request $request) => $request->method() === 'POST' && str_ends_with($request->url(), '/git/commits')
             && $request['parents'] === [self::BASE]
-            && $request['author']['name'] === 'student-autoqa[bot]'
-            && $request['author']['email'] === '987+student-autoqa[bot]@users.noreply.github.com');
+            && ! isset($request['author']) && ! isset($request['committer']) && ! isset($request['signature']));
         Http::assertSent(fn (Request $request) => str_ends_with($request->url(), '/git/refs')
             && $request['ref'] === 'refs/heads/agent/fix-registration' && $request['sha'] === self::COMMIT);
         Http::assertNotSent(fn (Request $request) => in_array($request->method(), ['PATCH', 'PUT', 'DELETE'], true));

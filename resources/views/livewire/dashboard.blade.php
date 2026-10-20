@@ -134,6 +134,8 @@
                     </form>
                 </section>
 
+                @include('partials.model-settings')
+
                 <div class="section-heading">
                     <h2>{{ __('ui.connections') }}</h2>
                 </div>
@@ -173,7 +175,7 @@
                         </div>
                         <h2>{{ __('ui.agent_model') }}</h2>
                         <p>{{ __('ui.agent_model_description') }}</p>
-                        <p class="fine-print">{{ config('autoqa.model_name') ? config('autoqa.model_name').'.' : __('ui.choose_model_hint') }} {{ __('ui.model_availability_hint') }}</p>
+                        <p class="fine-print">{{ __('ui.model_settings_hint') }}</p>
                     </section>
                 </div>
 
@@ -262,8 +264,8 @@
                                 </div>
 
                                 <div class="field">
-                                    <label for="repositoryUrl">{{ __('ui.github_repository') }}</label>
-                                    <input id="repositoryUrl" wire:model="repositoryUrl" type="url" placeholder="{{ __('ui.repository_placeholder') }}" required aria-describedby="repository-hint @error('repositoryUrl') repository-error @enderror" @error('repositoryUrl') aria-invalid="true" @enderror>
+                                    <label for="repositoryUrl">{{ __('ui.github_repository') }} <span class="optional">{{ __('ui.optional') }}</span></label>
+                                    <input id="repositoryUrl" wire:model.live.debounce.400ms="repositoryUrl" type="url" placeholder="{{ __('ui.repository_placeholder') }}" aria-describedby="repository-hint @error('repositoryUrl') repository-error @enderror" @error('repositoryUrl') aria-invalid="true" @enderror>
                                     <span class="field-hint" id="repository-hint">{{ __('ui.repository_installation_hint') }}</span>
                                     @error('repositoryUrl')
                                         <span id="repository-error" class="field-error">{{ $message }}</span>
@@ -313,6 +315,7 @@
                                     @enderror
                                 </div>
 
+                                @if (filled($repositoryUrl))
                                 <fieldset class="policy-field">
                                     <legend>{{ __('ui.repair_policy') }}</legend>
                                     <label class="policy-option">
@@ -334,14 +337,14 @@
                                     @enderror
                                 </fieldset>
 
-                                <details class="advanced-fields" @if ($errors->has('baseBranch') || $errors->has('deployedSha')) open @endif>
+                                <details class="advanced-fields" wire:ignore.self x-data @if ($errors->has('baseBranch') || $errors->has('deployedSha')) open @endif>
                                     <summary>{{ __('ui.source_version_branch') }}</summary>
                                     <div class="form-stack">
                                         <div class="field">
                                             <label for="baseBranch">{{ __('ui.base_branch') }} <span class="optional">{{ __('ui.optional') }}</span></label>
                                             <input id="baseBranch" wire:model="baseBranch" placeholder="{{ __('ui.base_branch_placeholder') }}">
                                             @error('baseBranch')
-                                                <span class="field-error">{{ $message }}</span>
+                                                <span class="field-error" x-init="$el.closest('details').open = true">{{ $message }}</span>
                                             @enderror
                                         </div>
                                         <div class="field">
@@ -349,11 +352,14 @@
                                             <input id="deployedSha" wire:model="deployedSha" placeholder="{{ __('ui.deployed_sha_placeholder') }}" maxlength="40" aria-describedby="sha-hint">
                                             <span id="sha-hint" class="field-hint">{{ __('ui.source_version_hint') }}</span>
                                             @error('deployedSha')
-                                                <span class="field-error">{{ $message }}</span>
+                                                <span class="field-error" x-init="$el.closest('details').open = true">{{ $message }}</span>
                                             @enderror
                                         </div>
                                     </div>
                                 </details>
+                                @else
+                                    <p class="guide-callout">{{ __('ui.website_only_description') }}</p>
+                                @endif
 
                                 <div class="form-actions">
                                     <button class="button button-primary" type="submit" wire:loading.attr="disabled" wire:target="saveProject">
@@ -386,10 +392,12 @@
                             <div class="project-summary">
                                 <h2>{{ $project->name }}</h2>
                                 <div class="project-links">
+                                    @if ($project->repository_url)
                                     <a href="{{ $project->repository_url }}" target="_blank" rel="noopener noreferrer">
                                         <x-icon name="github" />
                                         {{ preg_replace('~^https://github.com/~', '', $project->repository_url) }}
                                     </a>
+                                    @endif
                                     <a href="{{ $project->website_url }}" target="_blank" rel="noopener noreferrer">
                                         <x-icon name="browser" />
                                         {{ $project->website_url }}
@@ -404,7 +412,7 @@
                             <span class="field-hint"><strong>{{ __('ui.expected_label') }}</strong> {{ $project->expected_behavior }}</span>
                         </div>
                         <div class="project-overview-footer">
-                            <span class="policy-label">{{ __('ui.repair_policy_label') }} {{ $project->repair_policy === 'verified_pr' ? __('ui.verified_draft_pr') : __('ui.suggest_only') }}</span>
+                            <span class="policy-label">{{ $project->repository_url ? __('ui.repair_policy_label').' '.($project->repair_policy === 'verified_pr' ? __('ui.verified_draft_pr') : __('ui.suggest_only')) : __('ui.website_only_label') }}</span>
                             <div class="action-row">
                                 <button class="button button-secondary" type="button" wire:click="checkConnection" wire:loading.attr="disabled" wire:target="checkConnection">
                                     <span wire:loading.remove wire:target="checkConnection">{{ __('ui.check_connection') }}</span>
@@ -420,7 +428,7 @@
                     </section>
 
                     @if ($connection)
-                        <div class="notice {{ $connection['ok'] && $connection['can_push'] ? 'notice-success' : 'notice-warning' }}" role="status">{{ $connection['message'] }}</div>
+                        <div class="notice {{ $connection['ok'] && ($connection['can_push'] || ! $project->repository_url) ? 'notice-success' : 'notice-warning' }}" role="status">{{ $connection['message'] }}</div>
                     @endif
                     @error('run')
                         <div id="run" class="notice notice-error" role="alert">{{ $message }}</div>
@@ -431,7 +439,7 @@
                             <button class="inline-link" type="button" wire:click="setPanel('settings')">{{ __('ui.open_settings') }}</button>
                         </div>
                     @endif
-                    @if (! $project->deployed_sha)
+                    @if ($project->repository_url && ! $project->deployed_sha)
                         <p class="source-note">{{ __('ui.missing_source_note') }}</p>
                     @endif
 
@@ -461,6 +469,16 @@
 
                                 @if ($run->error)
                                     <div class="notice notice-error" role="alert">{{ $run->error }}</div>
+                                @endif
+
+                                @if (is_string($run->report['summary'] ?? null))
+                                    <section class="finding-section" aria-labelledby="report-summary-heading">
+                                        <h3 id="report-summary-heading">{{ __('ui.report_summary') }}</h3>
+                                        <p>{{ $run->report['summary'] }}</p>
+                                        @if (is_string($run->report['coverage'] ?? null))
+                                            <p class="field-hint">{{ $run->report['coverage'] }}</p>
+                                        @endif
+                                    </section>
                                 @endif
 
                                 <ol class="run-timeline">

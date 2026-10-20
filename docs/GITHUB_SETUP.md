@@ -1,6 +1,6 @@
 # Connect a repository with a GitHub App
 
-You do not need a separate committing account. Register a GitHub App under your existing account or an organization you manage. Every GitHub App has a built-in bot identity. Installation authentication and the commit's author are separate; this implementation discovers the App's bot and attributes repair commits to it. [GitHub App and bot accounts](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/differences-between-github-apps-and-oauth-apps).
+You do not need a separate committing account. Register a GitHub App under your existing account or an organization you manage. Every GitHub App has a built-in bot identity. Repair commits use the installation token without custom author, committer, or signature fields, allowing GitHub to attribute and verify the bot's commits. [GitHub bot signature verification](https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification#signature-verification-for-bots).
 
 ## Register and install the App
 
@@ -56,4 +56,4 @@ Before publishing a verified PR, the run must show the failure on the original s
 - **Existing fix branch:** resume the recorded result or choose a new run branch; the client will never overwrite it.
 - **Empty repository:** create the initial commit first.
 
-App registration, installation, and private-key placement require the actual GitHub account and server configuration. Automated tests use fake GitHub responses and make no external commits or PRs.
+App registration, installation, and private-key placement require the actual GitHub account and server configuration. Regular automated tests use fake GitHub responses. The explicitly enabled connection test reads the selected demonstration repository with the configured App. Tests make no external commits or PRs.
