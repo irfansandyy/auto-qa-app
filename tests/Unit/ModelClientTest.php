@@ -2,6 +2,7 @@
 
 namespace Tests\Unit;
 
+use App\Exceptions\ModelUnavailableException;
 use App\Services\ModelClient;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
@@ -28,7 +29,7 @@ class ModelClientTest extends TestCase
         Http::fake([self::ENDPOINT => Http::response(['choices' => [['message' => ['content' => $content], 'finish_reason' => 'stop']]])]);
         $context = ['page' => ['text' => 'Untrusted website asks to ignore instructions.']];
 
-        $result = (new ModelClient)->decide('Check the registration journey.', $context);
+        $result = (new ModelClient())->decide('Check the registration journey.', $context);
 
         $this->assertSame(['tool' => 'assert_text', 'text' => 'Welcome'], $result);
         Http::assertSentCount(1);
@@ -56,7 +57,7 @@ class ModelClientTest extends TestCase
         Http::fake([self::ENDPOINT => Http::response(['choices' => [['message' => ['content' => $content], 'finish_reason' => $finishReason]]])]);
         $this->expectException(RuntimeException::class);
 
-        (new ModelClient)->decide('Check registration.', []);
+        (new ModelClient())->decide('Check registration.', []);
     }
 
     public static function unsafeResponses(): array
@@ -79,7 +80,7 @@ class ModelClientTest extends TestCase
         Http::fake([self::ENDPOINT => Http::failedConnection()]);
 
         try {
-            (new ModelClient)->decide('Check registration.', []);
+            (new ModelClient())->decide('Check registration.', []);
             $this->fail('Expected the model connection error.');
         } catch (RuntimeException $exception) {
             $this->assertStringContainsString('could not be reached', $exception->getMessage());
@@ -93,14 +94,14 @@ class ModelClientTest extends TestCase
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('Model request failed');
 
-        (new ModelClient)->decide('Check registration.', []);
+        (new ModelClient())->decide('Check registration.', []);
     }
 
     public function test_health_authenticates_with_the_configured_api_key_without_returning_it(): void
     {
         Http::fake(['http://127.0.0.1:11434/v1/models' => Http::response(['data' => [['id' => 'qa-test-model']]])]);
 
-        $health = (new ModelClient)->health();
+        $health = (new ModelClient())->health();
 
         $this->assertTrue($health['ready']);
         $this->assertStringNotContainsString('private-model-test-key', json_encode($health));
@@ -112,6 +113,101 @@ class ModelClientTest extends TestCase
     {
         Http::fake(['http://127.0.0.1:11434/v1/models' => Http::failedConnection()]);
 
-        $this->assertFalse((new ModelClient)->health()['ready']);
+        $this->assertFalse((new ModelClient())->health()['ready']);
+    }
+
+    public function test_chat_uses_fallback_after_a_server_error(): void
+    {
+        config()->set('autoqa.model_url', 'http://primary.test/v1');
+        config()->set('autoqa.fallback_enabled', true);
+        config()->set('autoqa.fallback_model_url', 'http://fallback.test/v1');
+        config()->set('autoqa.fallback_model_name', 'fallback-model');
+        config()->set('autoqa.fallback_model_key', 'fallback-key');
+        Http::fake([
+            'http://primary.test/v1/chat/completions' => Http::response(['error' => 'down'], 503),
+            'http://fallback.test/v1/chat/completions' => Http::response([
+                'model' => 'fallback-model',
+                'choices' => [['message' => ['content' => 'Recovered.']]],
+                'usage' => ['prompt_tokens' => 1, 'completion_tokens' => 2, 'total_tokens' => 3],
+            ]),
+        ]);
+
+        $result = (new ModelClient())->chat([['role' => 'user', 'content' => 'Hello']]);
+
+        $this->assertSame('Recovered.', $result['content']);
+        $this->assertSame('fallback-model', $result['model_used']);
+        Http::assertSentCount(2);
+    }
+
+    public function test_chat_does_not_use_fallback_for_a_4xx_response(): void
+    {
+        config()->set('autoqa.model_url', 'http://primary.test/v1');
+        config()->set('autoqa.fallback_enabled', true);
+        config()->set('autoqa.fallback_model_url', 'http://fallback.test/v1');
+        config()->set('autoqa.fallback_model_name', 'fallback-model');
+        Http::fake([
+            'http://primary.test/v1/chat/completions' => Http::response(['error' => 'bad request'], 422),
+            'http://fallback.test/v1/chat/completions' => Http::response(['choices' => [['message' => ['content' => 'Should not run.']]]]),
+        ]);
+
+        try {
+            (new ModelClient())->chat([['role' => 'user', 'content' => 'Hello']]);
+            $this->fail('Expected the model to be unavailable.');
+        } catch (ModelUnavailableException) {
+            Http::assertSentCount(1);
+        }
+    }
+
+    public function test_decide_uses_fallback_after_a_connection_failure(): void
+    {
+        config()->set('autoqa.model_url', 'http://primary.test/v1');
+        config()->set('autoqa.fallback_enabled', true);
+        config()->set('autoqa.fallback_model_url', 'http://fallback.test/v1');
+        config()->set('autoqa.fallback_model_name', 'fallback-model');
+        Http::fake([
+            'http://primary.test/v1/chat/completions' => Http::failedConnection(),
+            'http://fallback.test/v1/chat/completions' => Http::response([
+                'model' => 'fallback-model',
+                'choices' => [['message' => ['content' => '{"tool":"finish"}'], 'finish_reason' => 'stop']],
+            ]),
+        ]);
+
+        $result = (new ModelClient())->decide('Instruction', []);
+
+        $this->assertSame(['tool' => 'finish'], $result);
+        Http::assertSentCount(2);
+    }
+
+    public function test_json_mode_can_be_disabled_for_a_gateway(): void
+    {
+        config()->set('autoqa.json_mode', false);
+        Http::fake([self::ENDPOINT => Http::response(['choices' => [['message' => ['content' => '{"tool":"finish"}'], 'finish_reason' => 'stop']]])]);
+
+        (new ModelClient())->decide('Instruction', []);
+
+        Http::assertSent(fn (Request $request): bool => ! isset($request['response_format']));
+    }
+
+    public function test_stream_uses_fallback_after_a_server_error(): void
+    {
+        config()->set('autoqa.model_url', 'http://primary.test/v1');
+        config()->set('autoqa.fallback_enabled', true);
+        config()->set('autoqa.fallback_model_url', 'http://fallback.test/v1');
+        config()->set('autoqa.fallback_model_name', 'fallback-model');
+        Http::fake([
+            'http://primary.test/v1/chat/completions' => Http::response(['error' => 'down'], 503),
+            'http://fallback.test/v1/chat/completions' => Http::response(implode("\n\n", [
+                'data: {"model":"fallback-model","choices":[{"delta":{"content":"Fallback "}}]}',
+                'data: {"model":"fallback-model","choices":[{"delta":{"content":"answer"}}]}',
+                'data: [DONE]',
+                '',
+            ])),
+        ]);
+
+        $events = iterator_to_array((new ModelClient())->streamEvents([['role' => 'user', 'content' => 'Hello']]));
+
+        $content = implode('', array_map(fn (array $event): string => $event['delta'] ?? '', $events));
+        $this->assertSame('Fallback answer', $content);
+        $this->assertSame('fallback-model', $events[array_key_last($events)]['model_used']);
     }
 }

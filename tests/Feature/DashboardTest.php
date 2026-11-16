@@ -30,6 +30,25 @@ class DashboardTest extends TestCase
         ]);
     }
 
+    public function test_operator_can_create_and_revoke_a_chat_token(): void
+    {
+        $operator = User::factory()->create();
+
+        $component = Livewire::actingAs($operator)->test(Dashboard::class)
+            ->set('tokenName', 'CLI integration')
+            ->call('createToken')
+            ->assertHasNoErrors();
+
+        $token = $operator->tokens()->sole();
+        $this->assertSame('CLI integration', $token->name);
+        $this->assertTrue($token->can('chat'));
+        $this->assertSame('', $component->get('tokenName'));
+
+        $component->call('revokeToken', $token->id);
+
+        $this->assertSame(0, $operator->tokens()->count());
+    }
+
     public function test_dashboard_redirects_unauthenticated_visitors(): void
     {
         $response = $this->get('/dashboard');

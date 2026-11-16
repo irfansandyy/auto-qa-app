@@ -16,7 +16,9 @@ class QaAgent
         private TargetPolicy $targets,
         private PatchPolicy $patches,
         private RepairSandbox $sandbox,
-    ) {}
+        private TranscriptRecorder $recorder,
+    ) {
+    }
 
     public function run(int $id): void
     {
@@ -29,8 +31,17 @@ class QaAgent
             $project = $run->project;
             $this->targets->assertAllowed($project->website_url, $project->target_mode);
             $this->updateActive($run, ['status' => 'testing', 'started_at' => now(), 'error' => null]);
+            $this->recordRunStart($run);
             $this->step($run, 'start', 'Starting an isolated browser session.');
-            $state = $this->browser->start($project->website_url, $project->target_mode);
+            $startedAt = hrtime(true);
+            try {
+                $state = $this->browser->start($project->website_url, $project->target_mode);
+            } catch (\Throwable $exception) {
+                $this->recordTool(['tool' => 'start'], ['error' => 'Browser start failed.'], 'failed', $this->durationMs($startedAt), true);
+
+                throw $exception;
+            }
+            $this->recordTool(['tool' => 'start'], $this->toolResultSummary($state), 'succeeded', $this->durationMs($startedAt), true);
             $session = $state['session_id'];
             $this->assertActive($run);
             $snapshot = $state['snapshot'];
@@ -53,12 +64,32 @@ class QaAgent
                 $action = $this->validateAction($decision, $snapshot);
                 if ($action['tool'] === 'finish') {
                     $completed = $action['outcome'] === 'passed' && $passedAssertions > 0;
-                    $this->finish($run, $completed ? 'completed' : 'blocked',
-                        ['summary' => $completed || $action['outcome'] === 'blocked' ? $action['summary'] : 'The agent did not produce a passing browser assertion. The requested behavior is unverified.', 'actions' => $this->redactActions($actions), 'passed_assertions' => $passedAssertions, 'coverage' => 'Only recorded actions and assertions were evaluated.']);
+                    $this->finish(
+                        $run,
+                        $completed ? 'completed' : 'blocked',
+                        ['summary' => $completed || $action['outcome'] === 'blocked' ? $action['summary'] : 'The agent did not produce a passing browser assertion. The requested behavior is unverified.', 'actions' => $this->redactActions($actions), 'passed_assertions' => $passedAssertions, 'coverage' => 'Only recorded actions and assertions were evaluated.']
+                    );
                     break;
                 }
                 $before = $snapshot;
-                $result = $this->browser->act($session, $action);
+                $startedAt = hrtime(true);
+                try {
+                    $result = $this->browser->act($session, $action);
+                } catch (\Throwable $exception) {
+                    $failedReplay = $action;
+                    if (isset($action['id'])) {
+                        $failedReplay['target'] = collect($before['elements'] ?? [])->firstWhere('id', $action['id']);
+                    }
+                    $this->recordTool(
+                        $this->redactActions([$failedReplay])[0],
+                        ['error' => 'Browser action failed.'],
+                        'failed',
+                        $this->durationMs($startedAt),
+                    );
+
+                    throw $exception;
+                }
+                $durationMs = $this->durationMs($startedAt);
                 $this->assertActive($run);
                 $snapshot = $result['snapshot'];
                 $observedSha = $snapshot['source_sha'] ?? null;
@@ -72,14 +103,24 @@ class QaAgent
                 }
                 $actions[] = $replay;
                 $safeAction = $this->redactActions([$replay])[0];
-                $this->step($run, 'action', $this->actionSummary($action, $replay['target'] ?? null),
-                    ['action' => $safeAction, 'url' => $snapshot['url'] ?? '', 'assertion' => $result['assertion'] ?? null]);
+                $this->recordTool(
+                    $safeAction,
+                    $this->toolResultSummary($result),
+                    ($result['assertion']['passed'] ?? null) === false ? 'failed' : 'succeeded',
+                    $durationMs,
+                );
+                $this->step(
+                    $run,
+                    'action',
+                    $this->actionSummary($action, $replay['target'] ?? null),
+                    ['action' => $safeAction, 'url' => $snapshot['url'] ?? '', 'assertion' => $result['assertion'] ?? null]
+                );
                 if (($result['assertion']['passed'] ?? null) === true) {
                     $passedAssertions++;
                 }
                 $failure = $this->observeFailure($run, $session, $result);
             }
-            $closed = $this->browser->close($session);
+            $closed = $this->closeBrowser($session);
             $artifacts = $closed['artifacts'] ?? [];
             $session = null;
             $this->assertActive($run);
@@ -106,7 +147,7 @@ class QaAgent
         } finally {
             if ($session) {
                 try {
-                    $this->browser->close($session);
+                    $this->closeBrowser($session);
                 } catch (\Throwable) {
                 }
             }
@@ -133,8 +174,10 @@ class QaAgent
         $repo = $this->github->inspectRepository($project->repository_url);
         $tree = $this->github->repositoryTree($project->repository_url, $sha);
         $candidates = array_values(array_filter($tree, fn ($file) => ($file['size'] ?? PHP_INT_MAX) <= 6000));
-        $selection = $this->model->decide('Choose up to four existing source files relevant to the failed journey from this repository tree. Return {files:[path,...]}. Do not invent file names.',
-            ['goal' => $run->goal, 'failure' => $run->report['failure'], 'tree' => array_slice($candidates, 0, 150)]);
+        $selection = $this->model->decide(
+            'Choose up to four existing source files relevant to the failed journey from this repository tree. Return {files:[path,...]}. Do not invent file names.',
+            ['goal' => $run->goal, 'failure' => $run->report['failure'], 'tree' => array_slice($candidates, 0, 150)]
+        );
         if (! is_array($selection['files'] ?? null)) {
             throw new RuntimeException('The model did not select valid source files.');
         }
@@ -147,8 +190,10 @@ class QaAgent
             throw new RuntimeException('The selected source exceeds this CPU MVP repair context. The finding remains available for manual review.');
         }
         $context = $source;
-        $patch = $this->model->decide('Diagnose the observed failure using the expected behavior and source. Return {diagnosis:string,patch_files:{path:complete_new_file_text},regression_test:string}. Change at most four small app/resources/views/routes files and add one new tests/Feature/*Test.php regression test. Keep expected behavior and existing tests unchanged. If uncertain return {diagnosis:string,patch_files:{},regression_test:""}.',
-            ['expected_behavior' => $run->expected_behavior, 'failure' => $run->report['failure'], 'source' => $context]);
+        $patch = $this->model->decide(
+            'Diagnose the observed failure using the expected behavior and source. Return {diagnosis:string,patch_files:{path:complete_new_file_text},regression_test:string}. Change at most four small app/resources/views/routes files and add one new tests/Feature/*Test.php regression test. Keep expected behavior and existing tests unchanged. If uncertain return {diagnosis:string,patch_files:{},regression_test:""}.',
+            ['expected_behavior' => $run->expected_behavior, 'failure' => $run->report['failure'], 'source' => $context]
+        );
         $files = $patch['patch_files'] ?? [];
         if (! is_array($files) || ! is_string($patch['diagnosis'] ?? null) || strlen($patch['diagnosis']) > 3000) {
             throw new RuntimeException('The agent could not produce a bounded repair proposal. The finding is saved for review.');
@@ -173,8 +218,10 @@ class QaAgent
 
             return;
         }
-        $control = $this->model->decide('Plan a normal valid-input browser journey for the same feature using disposable QA data. Return {actions:[{tool, target:{tag,role,label,text,type},value|key|text|url}...],original_assertion:{tool:assert_text,text}|{tool:assert_url,url}}. Use click/fill/select/press/navigate/assert_text/assert_url only. Locate elements by their exact accessible label or visible text from the observed page; omit IDs. Include at least one deterministic positive assertion for successful normal behavior. The original_assertion must check the expected successful behavior after repairing the original failed journey, and will be appended to its replay. Do not delete, send messages, buy, pay, or invent guaranteed outcomes. Return empty actions and omit original_assertion if the expected result is unknown.',
-            ['goal' => $run->goal, 'expected_behavior' => $run->expected_behavior, 'page' => $snapshot, 'original_actions' => $this->redactActions($actions)]);
+        $control = $this->model->decide(
+            'Plan a normal valid-input browser journey for the same feature using disposable QA data. Return {actions:[{tool, target:{tag,role,label,text,type},value|key|text|url}...],original_assertion:{tool:assert_text,text}|{tool:assert_url,url}}. Use click/fill/select/press/navigate/assert_text/assert_url only. Locate elements by their exact accessible label or visible text from the observed page; omit IDs. Include at least one deterministic positive assertion for successful normal behavior. The original_assertion must check the expected successful behavior after repairing the original failed journey, and will be appended to its replay. Do not delete, send messages, buy, pay, or invent guaranteed outcomes. Return empty actions and omit original_assertion if the expected result is unknown.',
+            ['goal' => $run->goal, 'expected_behavior' => $run->expected_behavior, 'page' => $snapshot, 'original_actions' => $this->redactActions($actions)]
+        );
         $controlActions = $this->validateControlPlan($control['actions'] ?? []);
         $this->assertActive($run);
         if (is_array($control['original_assertion'] ?? null) && in_array($control['original_assertion']['tool'] ?? '', ['assert_text', 'assert_url'], true)) {
@@ -250,7 +297,15 @@ class QaAgent
         if (! $errors && ! $assertionFailed) {
             return null;
         }
-        $evidence = $this->browser->act($session, ['tool' => 'screenshot']);
+        $startedAt = hrtime(true);
+        try {
+            $evidence = $this->browser->act($session, ['tool' => 'screenshot']);
+        } catch (\Throwable $exception) {
+            $this->recordTool(['tool' => 'screenshot'], ['error' => 'Screenshot capture failed.'], 'failed', $this->durationMs($startedAt), true);
+
+            throw $exception;
+        }
+        $this->recordTool(['tool' => 'screenshot'], ['artifact' => $evidence['artifact'] ?? null], 'succeeded', $this->durationMs($startedAt), true);
         $failure = ['network_errors' => $errors, 'assertion' => $result['assertion'] ?? null,
             'url' => $result['snapshot']['url'] ?? $run->project->website_url, 'artifact' => $evidence['artifact'] ?? null];
         $run->findings()->create(['title' => $errors ? 'A server error interrupted the tested journey' : 'Expected behavior was not observed',
@@ -342,5 +397,55 @@ class QaAgent
         $name = $element['label'] ?? $element['text'] ?? $element['tag'] ?? '';
 
         return ucfirst(str_replace('_', ' ', $action['tool'])).($name ? ' · '.mb_substr($name, 0, 100) : '');
+    }
+
+    private function recordRunStart(QaRun $run): void
+    {
+        try {
+            $this->recorder->begin($run);
+        } catch (\Throwable $exception) {
+            report($exception);
+        }
+    }
+
+    private function recordTool(array $action, array $result, string $status, int $durationMs, bool $system = false): void
+    {
+        try {
+            $this->recorder->logTool($action, $result, $status, $durationMs, $system);
+        } catch (\Throwable $exception) {
+            report($exception);
+        }
+    }
+
+    private function closeBrowser(string $session): array
+    {
+        $startedAt = hrtime(true);
+
+        try {
+            $closed = $this->browser->close($session);
+        } catch (\Throwable $exception) {
+            $this->recordTool(['tool' => 'close'], ['error' => 'Browser close failed.'], 'failed', $this->durationMs($startedAt), true);
+
+            throw $exception;
+        }
+
+        $this->recordTool(['tool' => 'close'], ['closed' => $closed['closed'] ?? true], 'succeeded', $this->durationMs($startedAt), true);
+
+        return $closed;
+    }
+
+    private function toolResultSummary(array $result): array
+    {
+        return [
+            'url' => $result['snapshot']['url'] ?? null,
+            'assertion' => $result['assertion'] ?? null,
+            'network_errors' => count($result['network_errors'] ?? []),
+            'artifact' => $result['artifact'] ?? null,
+        ];
+    }
+
+    private function durationMs(int $startedAt): int
+    {
+        return (int) round((hrtime(true) - $startedAt) / 1_000_000);
     }
 }

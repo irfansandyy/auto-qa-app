@@ -59,6 +59,10 @@ class Dashboard extends Component
 
     public ?array $connection = null;
 
+    public string $tokenName = '';
+
+    public ?string $plainTextToken = null;
+
     public function mount(): void
     {
         $first = $this->projects()->first();
@@ -278,6 +282,26 @@ class Dashboard extends Component
         $this->notice = __('messages.cancelled');
     }
 
+    public function createToken(): void
+    {
+        $this->validate([
+            'tokenName' => ['required', 'string', 'min:2', 'max:100'],
+        ], [], [
+            'tokenName' => __('messages.token_name'),
+        ]);
+
+        $this->plainTextToken = auth()->user()->createToken($this->tokenName, ['chat'])->plainTextToken;
+        $this->tokenName = '';
+        $this->notice = __('messages.token_created');
+        $this->resetValidation();
+    }
+
+    public function revokeToken(int $id): void
+    {
+        auth()->user()->tokens()->whereKey($id)->delete();
+        $this->notice = __('messages.token_revoked');
+    }
+
     private function projects(): Builder
     {
         return Project::query()->where('user_id', auth()->id())->latest('id');
@@ -310,6 +334,7 @@ class Dashboard extends Component
             'modelReady' => app(ModelClient::class)->ready(),
             'browserReady' => app(BrowserWorker::class)->ready(),
             'terminalStatuses' => self::TERMINAL_STATUSES,
+            'tokens' => auth()->user()->tokens()->latest()->get(),
             'installationUrl' => config('github.app_slug')
                 ? 'https://github.com/apps/'.rawurlencode(config('github.app_slug')).'/installations/new'
                 : null,

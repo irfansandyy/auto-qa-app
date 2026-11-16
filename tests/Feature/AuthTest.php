@@ -24,6 +24,11 @@ class AuthTest extends TestCase
         $response->assertOk()->assertSee('Create your operator account');
     }
 
+    public function test_fresh_workspace_login_redirects_to_first_operator_setup(): void
+    {
+        $this->get('/login')->assertRedirect(route('register'));
+    }
+
     public function test_first_registration_creates_hashed_operator_and_signs_in(): void
     {
         $response = $this->post('/register', [

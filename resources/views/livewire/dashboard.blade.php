@@ -134,6 +134,52 @@
                     </form>
                 </section>
 
+                <section class="card" aria-labelledby="api-tokens-heading">
+                    <div class="section-heading">
+                        <div>
+                            <h2 id="api-tokens-heading">{{ __('messages.api_tokens') }}</h2>
+                            <p>{{ __('messages.api_tokens_description') }}</p>
+                        </div>
+                    </div>
+
+                    @if ($plainTextToken)
+                        <div class="notice notice-success" role="status">
+                            <strong>{{ __('messages.token_once') }}</strong>
+                            <code>{{ $plainTextToken }}</code>
+                        </div>
+                    @endif
+
+                    <form wire:submit="createToken" class="form-stack">
+                        <div class="field">
+                            <label for="tokenName">{{ __('messages.token_name') }}</label>
+                            <input id="tokenName" wire:model="tokenName" placeholder="{{ __('messages.token_name_placeholder') }}" required maxlength="100">
+                            @error('tokenName')
+                                <span class="field-error">{{ $message }}</span>
+                            @enderror
+                        </div>
+                        <button class="button button-primary" type="submit">{{ __('messages.create_token') }}</button>
+                    </form>
+
+                    @if ($tokens->isEmpty())
+                        <p class="fine-print">{{ __('messages.no_tokens') }}</p>
+                    @else
+                        <ul class="token-list">
+                            @foreach ($tokens as $token)
+                                <li wire:key="token-{{ $token->id }}">
+                                    <div>
+                                        <strong>{{ $token->name }}</strong>
+                                        <span class="fine-print">
+                                            {{ __('messages.created') }} {{ $token->created_at->diffForHumans() }}
+                                            · {{ __('messages.last_used') }}: {{ $token->last_used_at?->diffForHumans() ?? __('messages.never') }}
+                                        </span>
+                                    </div>
+                                    <button class="button button-secondary" type="button" wire:click="revokeToken({{ $token->id }})">{{ __('messages.revoke') }}</button>
+                                </li>
+                            @endforeach
+                        </ul>
+                    @endif
+                </section>
+
                 <div class="section-heading">
                     <h2>{{ __('ui.connections') }}</h2>
                 </div>

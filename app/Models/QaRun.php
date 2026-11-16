@@ -6,6 +6,8 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\Relations\MorphMany;
 
 class QaRun extends Model
 {
@@ -32,5 +34,15 @@ class QaRun extends Model
     public function findings(): HasMany
     {
         return $this->hasMany(Finding::class, 'run_id');
+    }
+
+    public function chatSession(): HasOne
+    {
+        return $this->hasOne(ChatSession::class);
+    }
+
+    public function toolExecutionLogs(): MorphMany
+    {
+        return $this->morphMany(ToolExecutionLog::class, 'loggable');
     }
 }
