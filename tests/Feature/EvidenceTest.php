@@ -145,6 +145,25 @@ class EvidenceTest extends TestCase
         $this->assertSame($contents, file_get_contents($response->baseResponse->getFile()->getPathname()));
     }
 
+    public function test_live_preview_is_visible_only_for_its_owner_and_recorded_run(): void
+    {
+        $operator = User::factory()->create();
+        $project = Project::factory()->for($operator)->create();
+        $run = QaRun::factory()->for($project)->create(['status' => 'testing', 'report' => null]);
+        $otherRun = QaRun::factory()->for($project)->create();
+        $filename = 'browser-test-preview-1.png';
+        $this->fixture($filename);
+        $run->steps()->create([
+            'sequence' => 1, 'kind' => 'observe', 'summary' => 'Opened website.',
+            'data' => ['preview_artifact' => $filename],
+        ]);
+
+        $this->actingAs($operator)->get(route('runs.evidence', [$run, $filename]))
+            ->assertOk()->assertHeader('Content-Type', 'image/png');
+        $this->get(route('runs.evidence', [$otherRun, $filename]))->assertNotFound();
+        $this->actingAs(User::factory()->create())->get(route('runs.evidence', [$run, $filename]))->assertNotFound();
+    }
+
     public function test_dashboard_links_safe_evidence_and_omits_unsafe_report_names(): void
     {
         $operator = User::factory()->create();

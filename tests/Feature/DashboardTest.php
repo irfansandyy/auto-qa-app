@@ -49,17 +49,17 @@ class DashboardTest extends TestCase
         $response->assertOk()->assertSee('Visible project')->assertDontSee('Another operator private project');
     }
 
-    public function test_saving_local_project_records_owner_goal_and_explicit_repair_policy(): void
+    public function test_saving_local_project_records_owner_and_explicit_repair_policy_without_test_instructions(): void
     {
         $operator = User::factory()->create();
 
         Livewire::actingAs($operator)->test(Dashboard::class)
+            ->assertDontSee('What should the agent test?')
+            ->assertDontSee('What should happen?')
             ->set('name', 'Student portal')
             ->set('repositoryUrl', 'https://github.com/example/student-portal')
             ->set('websiteUrl', 'http://127.0.0.1:9000/register')
             ->set('targetMode', 'local')
-            ->set('goal', 'Register without a phone number and then sign in.')
-            ->set('expectedBehavior', 'Phone is optional and registration succeeds.')
             ->set('repairPolicy', 'verified_pr')
             ->call('saveProject')->assertHasNoErrors();
 
@@ -68,31 +68,29 @@ class DashboardTest extends TestCase
             'repository_url' => 'https://github.com/example/student-portal',
             'website_url' => 'http://127.0.0.1:9000/register',
             'target_mode' => 'local', 'repair_policy' => 'verified_pr',
-            'expected_behavior' => 'Phone is optional and registration succeeds.',
         ]);
     }
 
-    public function test_project_requires_website_goal_and_expected_behavior(): void
+    public function test_project_requires_a_name_and_website(): void
     {
         $operator = User::factory()->create();
 
         Livewire::actingAs($operator)->test(Dashboard::class)
-            ->call('saveProject')->assertHasErrors(['name', 'websiteUrl', 'goal', 'expectedBehavior']);
+            ->call('saveProject')->assertHasErrors(['name', 'websiteUrl']);
 
         $this->assertDatabaseCount('projects', 0);
     }
 
-    public function test_website_only_project_saves_without_source_binding_and_queues_a_report_run(): void
+    public function test_website_only_project_saves_and_queues_an_automatic_run_without_a_model_or_source_binding(): void
     {
         $operator = User::factory()->create();
+        config(['autoqa.model_url' => '']);
         Queue::fake([ExecuteQaRun::class]);
 
         Livewire::actingAs($operator)->test(Dashboard::class)
             ->set('name', 'Website check')
             ->set('websiteUrl', 'http://127.0.0.1:9000/register')
             ->set('targetMode', 'local')
-            ->set('goal', 'Check the registration form.')
-            ->set('expectedBehavior', 'Registration succeeds without a phone number.')
             ->set('baseBranch', 'main')
             ->set('deployedSha', str_repeat('b', 40))
             ->call('saveProject')->assertHasNoErrors()
@@ -107,7 +105,7 @@ class DashboardTest extends TestCase
             'base_branch' => null, 'deployed_sha' => null,
         ]);
         $this->assertDatabaseHas('qa_runs', [
-            'project_id' => $project->id, 'status' => 'queued', 'base_sha' => null,
+            'project_id' => $project->id, 'status' => 'queued', 'base_sha' => null, 'automatic' => true,
         ]);
         Queue::assertPushed(ExecuteQaRun::class, 1);
     }
@@ -166,8 +164,6 @@ class DashboardTest extends TestCase
             ->set('repositoryUrl', 'https://gitlab.com/example/portal')
             ->set('websiteUrl', 'http://127.0.0.1:9000/register')
             ->set('targetMode', 'local')
-            ->set('goal', 'Check registration.')
-            ->set('expectedBehavior', 'Registration succeeds.')
             ->call('saveProject')->assertHasErrors('repositoryUrl')
             ->assertSee('Enter a GitHub repository URL');
 
@@ -225,8 +221,6 @@ class DashboardTest extends TestCase
             ->set('repositoryUrl', 'https://github.com/example/portal')
             ->set('websiteUrl', 'http://127.0.0.1:9999')
             ->set('targetMode', 'local')
-            ->set('goal', 'Check registration.')
-            ->set('expectedBehavior', 'Registration succeeds.')
             ->call('saveProject')->assertHasErrors('websiteUrl')
             ->assertSee('This local address is not configured on the browser server.');
 
@@ -252,7 +246,7 @@ class DashboardTest extends TestCase
             ->call('selectRun', $foreign->id)->assertNotFound();
     }
 
-    public function test_starting_run_snapshots_goal_and_queues_work_for_owned_project(): void
+    public function test_starting_run_uses_automatic_check_instructions_and_queues_work_for_an_existing_project(): void
     {
         $operator = User::factory()->create();
         $project = Project::factory()->for($operator)->create(['deployed_sha' => str_repeat('a', 40)]);
@@ -263,7 +257,8 @@ class DashboardTest extends TestCase
 
         $this->assertDatabaseHas('qa_runs', [
             'project_id' => $project->id, 'status' => 'queued',
-            'goal' => $project->goal, 'expected_behavior' => $project->expected_behavior,
+            'automatic' => true, 'goal' => 'Check the starting page and a small sample of visible same-site links.',
+            'expected_behavior' => 'The checked pages load and render without server errors.',
             'base_sha' => str_repeat('a', 40),
         ]);
         $run = QaRun::query()->sole();

@@ -133,3 +133,153 @@ test('real Chromium completes an owned form journey, records evidence, and obser
     await rm(evidenceDir, { recursive: true, force: true });
   }
 });
+
+test('read-only Chromium sessions record bounded previews and report a broken page without making write requests', {
+  skip: !enabled,
+  timeout: 60000,
+}, async () => {
+  const evidenceDir = await mkdtemp(join(tmpdir(), 'autoqa-preview-integration-'));
+  const paths = [];
+  const server = createServer((request, response) => {
+    paths.push([request.method, request.url]);
+    response.writeHead(request.url === '/broken' ? 404 : 200, { 'content-type': 'text/html; charset=utf-8' });
+    if (request.url === '/blank') return response.end('<!doctype html><title>Blank fixture</title><body></body>');
+    response.end(request.url === '/broken' ? '<title>Page not found</title><h1>Page not found</h1>' : [
+      '<!doctype html><title>Owned help site</title><h1>Welcome</h1>',
+      '<a href="/broken">Help articles</a><a href="/account/delete">Manage account</a>',
+      '<a href="/account?token=fixture-secret">Account link</a><a href="/download" download>Download a file</a>',
+      '<a href="https://outside.example/site">Other site</a><button>Send a message</button>',
+      "<script>fetch('/write', {method: 'POST'}).catch(() => {});</script>",
+    ].join(''));
+  });
+  let manager;
+  try {
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const origin = 'http://127.0.0.1:'+server.address().port;
+    manager = new BrowserManager({
+      chromium, evidenceDir, policy: createTargetPolicy({ localTargets: new Set([origin]) }),
+    });
+    const opened = await manager.start({ url: origin+'/', mode: 'local', read_only: true });
+    assert.equal(opened.snapshot.document_status, 200);
+    const firstPreview = await readFile(join(evidenceDir, opened.preview_artifact));
+    assert.deepEqual([...firstPreview.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+
+    const links = opened.snapshot.elements.flatMap((element) => element.read_only_url ?? []);
+    assert.deepEqual(links, [origin+'/broken']);
+    const button = opened.snapshot.elements.find((element) => element.tag === 'button');
+    await assert.rejects(manager.act(opened.session_id, { tool: 'click', id: button.id }), /read-only/);
+    await assert.rejects(manager.act(opened.session_id, { tool: 'navigate', url: origin+'/unobserved' }), /visible page link/);
+    const passed = await manager.act(opened.session_id, { tool: 'assert_page' });
+    assert.equal(passed.assertion.passed, true);
+    assert.notEqual(passed.preview_artifact, opened.preview_artifact);
+    assert.equal((await manager.act(opened.session_id, { tool: 'assert_page', url: origin+'/' })).assertion.passed, true);
+    assert.equal((await manager.act(opened.session_id, { tool: 'assert_page', url: origin+'/broken' })).assertion.passed, false);
+    await assert.rejects(manager.act(opened.session_id, { tool: 'assert_page', url: 'https://outside.example/' }), /selected target/);
+
+    const broken = await manager.act(opened.session_id, { tool: 'navigate', url: links[0] });
+    assert.equal(broken.snapshot.document_status, 404);
+    assert.ok(broken.network_errors.some((error) => error.status === 404 && error.main_document));
+    const failed = await manager.act(opened.session_id, { tool: 'assert_page' });
+    assert.equal(failed.assertion.passed, false);
+    assert.equal(failed.artifact, failed.preview_artifact);
+    const closed = await manager.close(opened.session_id);
+    assert.ok(closed.artifacts.some(({ filename }) => filename === broken.preview_artifact));
+    const blank = await manager.start({ url: origin+'/blank', mode: 'local', read_only: true });
+    assert.equal(blank.snapshot.document_status, 200);
+    assert.equal((await manager.act(blank.session_id, { tool: 'assert_page' })).assertion.passed, false);
+    await manager.close(blank.session_id);
+    assert.ok(paths.some(([method, path]) => method === 'GET' && path === '/broken'));
+    assert.ok(!paths.some(([method, path]) => method === 'POST' || path === '/unobserved' || path === '/account/delete'));
+  } finally {
+    await manager?.shutdown();
+    server.closeAllConnections();
+    if (server.listening) await new Promise((resolve) => server.close(resolve));
+    await rm(evidenceDir, { recursive: true, force: true });
+  }
+});
+
+test('read-only front-end review measures a narrow viewport and observes layout, markup, and loading defects', {
+  skip: !enabled,
+  timeout: 60000,
+}, async () => {
+  const evidenceDir = await mkdtemp(join(tmpdir(), 'autoqa-frontend-integration-'));
+  const visits = [];
+  const server = createServer((request, response) => {
+    visits.push([request.method, request.url]);
+    if (request.url === '/broken.png' || request.url === '/favicon.ico') {
+      response.writeHead(404);
+      return response.end();
+    }
+    if (request.url === '/redirected.png') {
+      response.writeHead(302, { location: '/broken.png' });
+      return response.end();
+    }
+    if (request.url === '/next') {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'x-frame-options': 'SAMEORIGIN' });
+      return response.end('<!doctype html><html lang="en"><title>Next</title><meta name="viewport" content="width=device-width"><h1>Next</h1></html>');
+    }
+    response.writeHead(200, {
+      'content-type': 'text/html; charset=utf-8',
+      'content-security-policy': "frame-ancestors 'none'",
+      'x-content-type-options': 'nosniff',
+      'strict-transport-security': 'max-age=3600',
+      'set-cookie': 'localfixture=sample; Path=/',
+    });
+    response.end(`<!doctype html>
+      <style>body{margin:0}.wide-panel{width:700px}@media(max-width:600px){.desktop-only{display:none}}</style>
+      <main class="wide-panel"><h1>Owned check page</h1><a class="desktop-only" href="/next">Desktop link</a>
+      <img src="/broken.png" width="30" height="20"><img src="/redirected.png" alt="" width="30" height="20">
+      <label for="labelled">Name</label><input id="labelled"><input type="email"><input hidden></main>
+      <script>console.error('Fixture console error'); throw new Error('Fixture runtime error');</script>`);
+  });
+  let manager;
+  try {
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    manager = new BrowserManager({ chromium, evidenceDir, policy: createTargetPolicy({ localTargets: new Set([origin]) }) });
+    const started = await manager.start({ url: `${origin}/`, mode: 'local', read_only: true });
+    const result = await manager.act(started.session_id, { tool: 'inspect_frontend' });
+
+    assert.deepEqual(result.frontend.viewports, {
+      desktop: { width: 1152, height: 768, horizontal_overflow_px: 0 },
+      mobile: { width: 390, height: 844, horizontal_overflow_px: 310 },
+    });
+    assert.deepEqual(result.frontend.findings, [
+      { code: 'missing_viewport', count: 1 },
+      { code: 'missing_page_title', count: 1 },
+      { code: 'missing_document_language', count: 1 },
+      { code: 'missing_image_alt', count: 1 },
+      { code: 'unlabeled_controls', count: 1 },
+      { code: 'horizontal_overflow', count: 310, viewport: 'mobile' },
+      { code: 'javascript_error', count: 1 },
+      { code: 'failed_resource', count: 1 },
+    ]);
+    assert.deepEqual(result.hardening, { https: false, hsts: false, nosniff: true, csp: true, frame_restriction: true });
+    assert.ok(result.snapshot.elements.some((element) => element.text === 'Desktop link'), 'The restored desktop snapshot keeps links for the next action.');
+    const preview = await readFile(join(evidenceDir, result.preview_artifact));
+    assert.deepEqual([preview.readUInt32BE(16), preview.readUInt32BE(20)], [390, 844]);
+
+    await manager.act(started.session_id, { tool: 'navigate', url: `${origin}/next` });
+    const next = await manager.act(started.session_id, { tool: 'inspect_frontend' });
+    assert.deepEqual(next.frontend.findings, [], 'A second diagnostic only counts the current page.');
+    assert.deepEqual(next.hardening, { https: false, hsts: false, nosniff: false, csp: false, frame_restriction: true });
+    assert.equal(visits.filter(([method, path]) => method === 'GET' && path === '/').length, 1);
+    assert.equal(visits.filter(([method, path]) => method === 'GET' && path === '/next').length, 1);
+    assert.ok(visits.every(([method]) => method === 'GET'));
+    await manager.close(started.session_id);
+
+    const legacy = await manager.start({ url: `${origin}/`, mode: 'local' });
+    await assert.rejects(manager.act(legacy.session_id, { tool: 'inspect_frontend' }), /read-only session/);
+  } finally {
+    await manager?.shutdown();
+    server.closeAllConnections();
+    if (server.listening) await new Promise((resolve) => server.close(resolve));
+    await rm(evidenceDir, { recursive: true, force: true });
+  }
+});

@@ -47,15 +47,13 @@ class Dashboard extends Component
 
     public string $targetMode = 'public';
 
-    public string $goal = '';
-
-    public string $expectedBehavior = '';
-
     public string $baseBranch = '';
 
     public string $deployedSha = '';
 
     public string $repairPolicy = 'verified_pr';
+
+    public string $runGuidance = '';
 
     public ?string $notice = null;
 
@@ -86,7 +84,7 @@ class Dashboard extends Component
 
     public function newProject(): void
     {
-        $this->reset(['name', 'repositoryUrl', 'websiteUrl', 'targetMode', 'goal', 'expectedBehavior', 'baseBranch', 'deployedSha', 'repairPolicy', 'notice', 'connection']);
+        $this->reset(['name', 'repositoryUrl', 'websiteUrl', 'targetMode', 'baseBranch', 'deployedSha', 'repairPolicy', 'notice', 'connection']);
         $this->editingProjectId = null;
         $this->resetValidation();
         $this->panel = 'workspace';
@@ -113,8 +111,6 @@ class Dashboard extends Component
         $this->repositoryUrl = $project->repository_url ?? '';
         $this->websiteUrl = $project->website_url;
         $this->targetMode = $project->target_mode;
-        $this->goal = $project->goal;
-        $this->expectedBehavior = $project->expected_behavior;
         $this->baseBranch = $project->base_branch ?? '';
         $this->deployedSha = $project->deployed_sha ?? '';
         $this->repairPolicy = $project->repair_policy === 'report_only' ? 'verified_pr' : $project->repair_policy;
@@ -132,8 +128,6 @@ class Dashboard extends Component
             'repositoryUrl' => ['nullable', 'url:https', 'max:500', 'regex:~^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?/?$~'],
             'websiteUrl' => ['required', 'url:http,https', 'max:2000'],
             'targetMode' => ['required', Rule::in(['public', 'local'])],
-            'goal' => ['required', 'string', 'min:5', 'max:4000'],
-            'expectedBehavior' => ['required', 'string', 'min:5', 'max:6000'],
             'baseBranch' => ['nullable', 'string', 'max:200', 'regex:~^[A-Za-z0-9][A-Za-z0-9._/-]*$~'],
             'deployedSha' => ['nullable', 'regex:/^[a-fA-F0-9]{40}$/'],
             'repairPolicy' => ['required', Rule::in(['suggest_only', 'verified_pr'])],
@@ -145,8 +139,6 @@ class Dashboard extends Component
             'repositoryUrl' => __('messages.attributes.repositoryUrl'),
             'websiteUrl' => __('messages.attributes.websiteUrl'),
             'targetMode' => __('messages.attributes.targetMode'),
-            'expectedBehavior' => __('messages.attributes.expectedBehavior'),
-            'goal' => __('messages.attributes.goal'),
             'baseBranch' => __('messages.attributes.baseBranch'),
             'deployedSha' => __('messages.attributes.deployedSha'),
             'repairPolicy' => __('messages.attributes.repairPolicy'),
@@ -164,8 +156,6 @@ class Dashboard extends Component
             'repository_url' => $this->repositoryUrl !== '' ? rtrim($this->repositoryUrl, '/') : null,
             'website_url' => $this->websiteUrl,
             'target_mode' => $this->targetMode,
-            'goal' => trim($this->goal),
-            'expected_behavior' => trim($this->expectedBehavior),
             'base_branch' => $this->repositoryUrl !== '' ? ($this->baseBranch ?: null) : null,
             'deployed_sha' => $this->repositoryUrl !== '' && $this->deployedSha ? strtolower($this->deployedSha) : null,
             'repair_policy' => $this->repositoryUrl !== '' ? $this->repairPolicy : 'report_only',
@@ -184,7 +174,11 @@ class Dashboard extends Component
                 return $project;
             });
         } else {
-            $project = Project::query()->create($attributes);
+            $project = Project::query()->create([
+                ...$attributes,
+                'goal' => QaRun::AUTOMATIC_GOAL,
+                'expected_behavior' => QaRun::AUTOMATIC_EXPECTED_BEHAVIOR,
+            ]);
         }
 
         $this->selectProject($project->id);
@@ -199,6 +193,7 @@ class Dashboard extends Component
         $this->showingProjectForm = false;
         $this->editingProjectId = null;
         $this->connection = null;
+        $this->runGuidance = '';
         $this->notice = null;
         $this->panel = 'workspace';
         $this->resetValidation();
@@ -257,29 +252,40 @@ class Dashboard extends Component
 
     public function startRun(): void
     {
+        $validated = $this->validate(['runGuidance' => ['nullable', 'string', 'max:1000']], [], [
+            'runGuidance' => __('ui.run_guidance'),
+        ]);
+        $guidance = trim((string) ($validated['runGuidance'] ?? ''));
         $project = $this->selectedProject();
 
-        if (! app(ModelClient::class)->forUser(auth()->user())->ready() || ! app(BrowserWorker::class)->ready()) {
-            $this->addError('run', __('messages.configure_services'));
+        if (! $this->canStartRun()) {
+            $this->addError('run', __('ui.configure_browser_hint'));
 
             return;
         }
 
-        $run = DB::transaction(function () use ($project) {
-            Project::query()->whereKey($project->id)->lockForUpdate()->firstOrFail();
+        $run = DB::transaction(function () use ($project, $guidance): QaRun {
+            $project = $this->projects()->whereKey($project->id)->lockForUpdate()->firstOrFail();
+            if (! $this->canStartRun()) {
+                throw ValidationException::withMessages(['run' => __('ui.configure_browser_hint')]);
+            }
             if ($project->runs()->whereNotIn('status', self::TERMINAL_STATUSES)->exists()) {
                 throw ValidationException::withMessages(['run' => __('messages.run_active')]);
             }
 
             return $project->runs()->create([
                 'status' => 'queued',
-                'goal' => $project->goal,
-                'expected_behavior' => $project->expected_behavior,
+                'automatic' => true,
+                'advanced' => true,
+                'guidance' => $guidance === '' ? null : $guidance,
+                'goal' => QaRun::ADVANCED_GOAL,
+                'expected_behavior' => QaRun::AUTOMATIC_EXPECTED_BEHAVIOR,
                 'base_sha' => $project->deployed_sha,
             ]);
         });
 
         $this->selectedRunId = $run->id;
+        $this->runGuidance = '';
         ExecuteQaRun::dispatch($run->id);
         $this->notice = __('messages.run_queued');
         $this->resetValidation('run');
@@ -307,6 +313,11 @@ class Dashboard extends Component
         return $this->projects()->findOrFail($this->selectedProjectId);
     }
 
+    private function canStartRun(): bool
+    {
+        return app(BrowserWorker::class)->ready();
+    }
+
     public function render(): View
     {
         $projects = $this->projects()->get();
@@ -328,6 +339,7 @@ class Dashboard extends Component
             'githubReady' => $githubReady,
             'modelReady' => app(ModelClient::class)->forUser(auth()->user())->ready(),
             'browserReady' => app(BrowserWorker::class)->ready(),
+            'canStartRun' => $this->canStartRun(),
             'terminalStatuses' => self::TERMINAL_STATUSES,
             'installationUrl' => config('github.app_slug')
                 ? 'https://github.com/apps/'.rawurlencode(config('github.app_slug')).'/installations/new'

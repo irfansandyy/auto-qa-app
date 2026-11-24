@@ -1,4 +1,8 @@
-<div class="workspace" wire:poll.5s>
+<div class="workspace">
+    @if ($panel === 'workspace' && $runs->contains(fn ($item) => ! in_array($item->status, $terminalStatuses, true)))
+        <span wire:key="active-run-poller" wire:poll.2s hidden></span>
+    @endif
+
     <aside class="sidebar" aria-label="{{ __('ui.workspace_navigation') }}">
         <a href="{{ route('dashboard') }}" class="brand">{{ __('ui.app_name') }}</a>
 
@@ -264,15 +268,6 @@
                                 </div>
 
                                 <div class="field">
-                                    <label for="repositoryUrl">{{ __('ui.github_repository') }} <span class="optional">{{ __('ui.optional') }}</span></label>
-                                    <input id="repositoryUrl" wire:model.live.debounce.400ms="repositoryUrl" type="url" placeholder="{{ __('ui.repository_placeholder') }}" aria-describedby="repository-hint @error('repositoryUrl') repository-error @enderror" @error('repositoryUrl') aria-invalid="true" @enderror>
-                                    <span class="field-hint" id="repository-hint">{{ __('ui.repository_installation_hint') }}</span>
-                                    @error('repositoryUrl')
-                                        <span id="repository-error" class="field-error">{{ $message }}</span>
-                                    @enderror
-                                </div>
-
-                                <div class="field">
                                     <label for="websiteUrl">{{ __('ui.website_url') }}</label>
                                     <input id="websiteUrl" wire:model="websiteUrl" type="url" placeholder="{{ __('ui.website_placeholder') }}" required aria-describedby="website-hint @error('websiteUrl') website-error @enderror" @error('websiteUrl') aria-invalid="true" @enderror>
                                     <span class="field-hint" id="website-hint">{{ __('ui.website_reachability_hint') }}</span>
@@ -300,18 +295,11 @@
                                 @endif
 
                                 <div class="field">
-                                    <label for="goal">{{ __('ui.goal_label') }}</label>
-                                    <textarea id="goal" wire:model="goal" rows="3" placeholder="{{ __('ui.goal_placeholder') }}" required maxlength="4000" @error('goal') aria-invalid="true" aria-describedby="goal-error" @enderror></textarea>
-                                    @error('goal')
-                                        <span id="goal-error" class="field-error">{{ $message }}</span>
-                                    @enderror
-                                </div>
-
-                                <div class="field">
-                                    <label for="expectedBehavior">{{ __('ui.expected_behavior_label') }}</label>
-                                    <textarea id="expectedBehavior" wire:model="expectedBehavior" rows="3" placeholder="{{ __('ui.expected_behavior_placeholder') }}" required maxlength="6000" @error('expectedBehavior') aria-invalid="true" aria-describedby="expected-error" @enderror></textarea>
-                                    @error('expectedBehavior')
-                                        <span id="expected-error" class="field-error">{{ $message }}</span>
+                                    <label for="repositoryUrl">{{ __('ui.github_repository') }} <span class="optional">{{ __('ui.optional') }}</span></label>
+                                    <input id="repositoryUrl" wire:model.live.debounce.400ms="repositoryUrl" type="url" placeholder="{{ __('ui.repository_placeholder') }}" aria-describedby="repository-hint @error('repositoryUrl') repository-error @enderror" @error('repositoryUrl') aria-invalid="true" @enderror>
+                                    <span class="field-hint" id="repository-hint">{{ __('ui.repository_installation_hint') }}</span>
+                                    @error('repositoryUrl')
+                                        <span id="repository-error" class="field-error">{{ $message }}</span>
                                     @enderror
                                 </div>
 
@@ -375,7 +363,7 @@
 
                         <aside class="setup-help">
                             <h2>{{ __('ui.before_starting') }}</h2>
-                            <p>{{ __('ui.test_data_hint') }}</p>
+                            <p>{{ __('ui.project_auto_check') }}</p>
                             <h3>{{ __('ui.repository_access') }}</h3>
                             <p>{{ __('ui.repository_permission_hint') }}</p>
                             <h3>{{ __('ui.local_websites') }}</h3>
@@ -406,10 +394,12 @@
                             </div>
                             <span class="project-target">{{ $project->target_mode === 'local' ? __('ui.local_target') : __('ui.public_target') }}</span>
                         </div>
-                        <div class="project-goal">
-                            <h3>{{ __('ui.testing_goal') }}</h3>
-                            <p>{{ $project->goal }}</p>
-                            <span class="field-hint"><strong>{{ __('ui.expected_label') }}</strong> {{ $project->expected_behavior }}</span>
+                        <p class="project-scope">{{ __('ui.project_auto_check') }}</p>
+                        <div class="field run-guidance">
+                            <label for="run-guidance">{{ __('ui.run_guidance') }} <span class="field-optional">{{ __('ui.optional') }}</span></label>
+                            <textarea id="run-guidance" wire:model="runGuidance" rows="2" maxlength="1000" aria-describedby="run-guidance-hint @error('runGuidance') run-guidance-error @enderror" @error('runGuidance') aria-invalid="true" @enderror placeholder="{{ __('ui.run_guidance_placeholder') }}"></textarea>
+                            <p id="run-guidance-hint" class="field-hint">{{ __('ui.run_guidance_hint') }}</p>
+                            @error('runGuidance') <p id="run-guidance-error" class="field-error" role="alert">{{ $message }}</p> @enderror
                         </div>
                         <div class="project-overview-footer">
                             <span class="policy-label">{{ $project->repository_url ? __('ui.repair_policy_label').' '.($project->repair_policy === 'verified_pr' ? __('ui.verified_draft_pr') : __('ui.suggest_only')) : __('ui.website_only_label') }}</span>
@@ -418,9 +408,9 @@
                                     <span wire:loading.remove wire:target="checkConnection">{{ __('ui.check_connection') }}</span>
                                     <span wire:loading wire:target="checkConnection">{{ __('ui.checking_access') }}</span>
                                 </button>
-                                <button class="button button-primary" type="button" wire:click="startRun" wire:loading.attr="disabled" wire:target="startRun" @disabled(! $modelReady || ! $browserReady)>
+                                <button class="button button-primary" type="button" wire:click="startRun" wire:loading.attr="disabled" wire:target="startRun" @disabled(! $canStartRun)>
                                     <x-icon name="play" />
-                                    <span wire:loading.remove wire:target="startRun">{{ __('ui.start_qa_run') }}</span>
+                                    <span wire:loading.remove wire:target="startRun">{{ __($project->repository_url && $project->repair_policy === 'verified_pr' ? 'ui.start_test_and_repair' : 'ui.start_qa_run') }}</span>
                                     <span wire:loading wire:target="startRun">{{ __('ui.queueing') }}</span>
                                 </button>
                             </div>
@@ -433,11 +423,13 @@
                     @error('run')
                         <div id="run" class="notice notice-error" role="alert">{{ $message }}</div>
                     @enderror
-                    @if (! $modelReady || ! $browserReady)
+                    @if (! $canStartRun)
                         <div class="notice notice-warning">
-                            {{ __('ui.configure_services_hint') }}
+                            {{ __('ui.configure_browser_hint') }}
                             <button class="inline-link" type="button" wire:click="setPanel('settings')">{{ __('ui.open_settings') }}</button>
                         </div>
+                    @elseif ($project->repository_url && ! $modelReady)
+                        <p class="source-note">{{ __('ui.repair_model_hint') }}</p>
                     @endif
                     @if ($project->repository_url && ! $project->deployed_sha)
                         <p class="source-note">{{ __('ui.missing_source_note') }}</p>
@@ -451,6 +443,28 @@
                                     <p>{{ __('ui.start_project_hint') }}</p>
                                 </div>
                             @else
+                                @php
+                                    $steps = $run->steps->sortBy('sequence');
+                                    $runFinished = in_array($run->status, $terminalStatuses, true);
+                                    $previewFor = function ($step): ?string {
+                                        $name = $step->data['preview_artifact'] ?? null;
+
+                                        return is_string($name) && preg_match('/\Abrowser-[a-zA-Z0-9-]+\.png\z/', $name) ? $name : null;
+                                    };
+                                    $latestBrowserStep = $steps->last(fn ($step) => $previewFor($step) !== null);
+                                    $activityMessages = $run->automatic ? __('ui.automatic_activity') : [];
+                                    $activityMessage = fn ($key, string $fallback, array $replacements = []): string =>
+                                        is_string($key) && isset($activityMessages[$key])
+                                            ? __('ui.automatic_activity.'.$key, $replacements)
+                                            : $fallback;
+                                    $browserStage = match ($run->status) {
+                                        'queued' => 'queued',
+                                        'testing' => ($steps->last()?->data['message'] ?? null) === 'repository_scan' ? 'reviewing_source' : ($latestBrowserStep ? 'testing' : 'opening'),
+                                        'diagnosing' => 'diagnosing',
+                                        'repairing' => 'repairing',
+                                        default => 'finished',
+                                    };
+                                @endphp
                                 <div class="section-heading">
                                     <h2>{{ __('ui.run_number', ['number' => $run->id]) }}</h2>
                                     <span class="badge {{ $run->status === 'completed' ? 'badge-success' : (in_array($run->status, ['failed', 'blocked', 'needs_configuration', 'verification_failed']) ? 'badge-warning' : 'badge-neutral') }}">
@@ -458,11 +472,14 @@
                                     </span>
                                 </div>
                                 <div class="run-meta">
-                                    <span>{{ __('ui.created_at', ['time' => $run->created_at->timezone(config('app.timezone'))->locale(app()->getLocale())->translatedFormat('d M, H:i')]) }}</span>
+                                    <x-local-time :date="$run->created_at" :identity="'created-'.$run->id" :label="__('ui.created_at', ['time' => ''])" />
                                     @if ($run->finished_at)
-                                        <span>{{ __('ui.finished_at', ['time' => $run->finished_at->timezone(config('app.timezone'))->locale(app()->getLocale())->translatedFormat('H:i')]) }}</span>
+                                        <x-local-time :date="$run->finished_at" :identity="'finished-'.$run->id" :label="__('ui.finished_at', ['time' => ''])" :time-only="true" />
                                     @endif
-                                    @if (! in_array($run->status, $terminalStatuses))
+                                    @if ($run->advanced)
+                                        <span>{{ __($run->guidance ? 'ui.guided_run' : 'ui.automatic_run') }}</span>
+                                    @endif
+                                    @if (! $runFinished)
                                         <button class="text-link danger-link" type="button" wire:click="cancelRun({{ $run->id }})" wire:loading.attr="disabled" wire:target="cancelRun">{{ __('ui.cancel_run') }}</button>
                                     @endif
                                 </div>
@@ -471,27 +488,127 @@
                                     <div class="notice notice-error" role="alert">{{ $run->error }}</div>
                                 @endif
 
+                                @if ($run->advanced && filled($run->guidance))
+                                    <section class="finding-section" aria-labelledby="run-guidance-heading">
+                                        <h3 id="run-guidance-heading">{{ __('ui.run_guidance') }}</h3>
+                                        <p class="review-guidance">{{ $run->guidance }}</p>
+                                    </section>
+                                @endif
+
                                 @if (is_string($run->report['summary'] ?? null))
                                     <section class="finding-section" aria-labelledby="report-summary-heading">
                                         <h3 id="report-summary-heading">{{ __('ui.report_summary') }}</h3>
-                                        <p>{{ $run->report['summary'] }}</p>
+                                        <p>{{ $activityMessage($run->report['message'] ?? null, $run->report['summary'], ['status' => $run->report['failure']['document_status'] ?? '']) }}</p>
                                         @if (is_string($run->report['coverage'] ?? null))
-                                            <p class="field-hint">{{ $run->report['coverage'] }}</p>
+                                            <p class="field-hint">{{ $run->advanced ? __('ui.advanced_coverage') : ($run->automatic ? __('ui.automatic_coverage') : $run->report['coverage']) }}</p>
+                                        @endif
+                                    </section>
+                                @endif
+
+                                @if (is_array($audit = $run->report['audit'] ?? null))
+                                    @php
+                                        $repositoryAudit = $audit['repository'] ?? [];
+                                        $frontendAudit = $audit['frontend'] ?? [];
+                                        $auditStatuses = __('ui.audit.status');
+                                        $coverageStatus = fn (?string $status): string => $auditStatuses[$status ?? 'not_checked'] ?? $auditStatuses['unavailable'];
+                                    @endphp
+                                    <section class="finding-section audit-coverage" aria-labelledby="audit-coverage-heading">
+                                        <h3 id="audit-coverage-heading">{{ __('ui.audit.title') }}</h3>
+                                        <dl class="coverage-list">
+                                            <div>
+                                                <dt>{{ __('ui.audit.frontend') }}</dt>
+                                                <dd>{{ $coverageStatus($frontendAudit['status'] ?? null) }}</dd>
+                                                @if (($frontendAudit['pages_reviewed'] ?? 0) > 0)
+                                                    <dd class="field-hint">{{ trans_choice('ui.audit.pages', $frontendAudit['pages_reviewed']) }}</dd>
+                                                @endif
+                                                @if (isset($frontendAudit['viewports']['desktop']['width'], $frontendAudit['viewports']['mobile']['width']))
+                                                    <dd class="field-hint">{{ __('ui.audit.viewports', ['desktop' => $frontendAudit['viewports']['desktop']['width'], 'mobile' => $frontendAudit['viewports']['mobile']['width']]) }}</dd>
+                                                @endif
+                                            </div>
+                                            <div>
+                                                <dt>{{ __('ui.audit.hardening') }}</dt>
+                                                <dd>{{ $coverageStatus($audit['hardening']['status'] ?? null) }}</dd>
+                                            </div>
+                                            <div>
+                                                <dt>{{ __('ui.audit.source') }}</dt>
+                                                <dd>{{ $coverageStatus($repositoryAudit['source_status'] ?? null) }}</dd>
+                                                @if (isset($repositoryAudit['files_reviewed']))
+                                                    <dd class="field-hint">{{ trans_choice('ui.audit.files', $repositoryAudit['files_reviewed']) }}</dd>
+                                                @endif
+                                                @if (($repositoryAudit['source_matches_deployment'] ?? null) === false)
+                                                    <dd class="field-hint">{{ __('ui.audit.unbound') }}</dd>
+                                                @endif
+                                            </div>
+                                            <div>
+                                                <dt>{{ __('ui.audit.dependencies') }}</dt>
+                                                <dd>{{ $coverageStatus($repositoryAudit['advisory_status'] ?? null) }}</dd>
+                                                @if (isset($repositoryAudit['packages_reviewed']))
+                                                    <dd class="field-hint">{{ trans_choice('ui.audit.packages', $repositoryAudit['packages_reviewed']) }}</dd>
+                                                @endif
+                                                @if (($repositoryAudit['packages_skipped'] ?? 0) > 0)
+                                                    <dd class="field-hint">{{ trans_choice('ui.audit.packages_skipped', $repositoryAudit['packages_skipped']) }}</dd>
+                                                @endif
+                                            </div>
+                                        </dl>
+                                    </section>
+                                @endif
+
+                                @if ($latestBrowserStep || ! $runFinished || $run->automatic)
+                                    <section class="browser-activity" wire:key="browser-activity-{{ $run->id }}" aria-labelledby="browser-activity-heading">
+                                        <div class="browser-activity-heading">
+                                            <div>
+                                                <h3 id="browser-activity-heading">{{ __('ui.browser_activity') }}</h3>
+                                                <p class="browser-stage" role="status" aria-live="polite" aria-atomic="true">{{ __('ui.browser_stage.'.$browserStage, ['number' => $latestBrowserStep?->sequence]) }}</p>
+                                            </div>
+                                            @if ($latestBrowserStep)
+                                                <a class="text-link browser-frame-link" href="{{ route('runs.evidence', [$run, $previewFor($latestBrowserStep)]) }}" target="_blank" rel="noopener noreferrer">
+                                                    {{ __('ui.open_latest_screenshot') }}
+                                                </a>
+                                            @endif
+                                        </div>
+                                        @if ($latestBrowserStep)
+                                            <figure class="browser-frame" wire:key="latest-preview-{{ $latestBrowserStep->id }}">
+                                                <img src="{{ route('runs.evidence', [$run, $previewFor($latestBrowserStep)]) }}" alt="{{ __('ui.step_screenshot_alt', ['number' => $latestBrowserStep->sequence]) }}" decoding="async">
+                                                <figcaption>{{ __('ui.latest_screenshot_step', ['number' => $latestBrowserStep->sequence]) }}</figcaption>
+                                            </figure>
+                                        @else
+                                            <div class="browser-frame browser-frame-empty">
+                                                <x-icon name="browser" />
+                                                <p>{{ __($runFinished ? 'ui.no_browser_screenshots' : 'ui.first_screenshot_pending') }}</p>
+                                            </div>
                                         @endif
                                     </section>
                                 @endif
 
                                 <ol class="run-timeline">
-                                    @forelse ($run->steps->sortBy('sequence') as $step)
+                                    @forelse ($steps as $step)
+                                        @php
+                                            $stepPreview = $previewFor($step);
+                                            $details = \Illuminate\Support\Arr::except($step->data ?? [], ['preview_artifact', 'message', 'label']);
+                                        @endphp
                                         <li wire:key="run-step-{{ $step->id }}">
                                             <span class="step-index" aria-hidden="true">{{ $step->sequence }}</span>
                                             <div>
                                                 <span class="timeline-kind">{{ __('ui.kind.'.$step->kind) }}</span>
-                                                <p>{{ $step->summary }}</p>
-                                                @if (! empty($step->data))
-                                                    <details class="evidence-details">
+                                                <p>{{ $activityMessage($step->data['message'] ?? null, $step->summary, ['label' => $step->data['label'] ?? '', 'status' => $step->data['document_status'] ?? '']) }}</p>
+                                                @if ($stepPreview)
+                                                    <details class="step-screenshot" wire:ignore.self x-data="{ opened: false }" @toggle="if ($el.open) opened = true">
+                                                        <summary>
+                                                            <x-icon name="image" />
+                                                            {{ __('ui.step_screenshot', ['number' => $step->sequence]) }}
+                                                        </summary>
+                                                        <template x-if="opened">
+                                                            <a class="step-screenshot-image" href="{{ route('runs.evidence', [$run, $stepPreview]) }}" target="_blank" rel="noopener noreferrer">
+                                                                <img src="{{ route('runs.evidence', [$run, $stepPreview]) }}" alt="{{ __('ui.step_screenshot_alt', ['number' => $step->sequence]) }}" loading="lazy" decoding="async">
+                                                            </a>
+                                                        </template>
+                                                        <noscript><a class="text-link" href="{{ route('runs.evidence', [$run, $stepPreview]) }}">{{ __('ui.view_screenshot') }}</a></noscript>
+                                                    </details>
+                                                @endif
+                                                @if ($details)
+                                                    <details class="evidence-details" wire:ignore.self>
                                                         <summary>{{ __('ui.recorded_details') }}</summary>
-                                                        <pre>{{ json_encode($step->data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) }}</pre>
+                                                        <pre>{{ json_encode($details, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) }}</pre>
                                                     </details>
                                                 @endif
                                             </div>
@@ -507,9 +624,19 @@
                                     <div class="finding-section">
                                         <h3>{{ __('ui.findings_count', ['count' => $run->findings->count()]) }}</h3>
                                         @foreach ($run->findings as $finding)
+                                            @php
+                                                $findingCategory = $finding->evidence['category'] ?? '';
+                                                $findingCategoryLabel = __('ui.audit.category')[$findingCategory] ?? null;
+                                                $advisoryUrl = $finding->evidence['advisory_url'] ?? null;
+                                            @endphp
                                             <article class="finding" wire:key="finding-{{ $finding->id }}">
                                                 <div class="finding-heading">
-                                                    <h4>{{ $finding->title }}</h4>
+                                                    <div>
+                                                        @if ($findingCategoryLabel)
+                                                            <p class="field-hint finding-category">{{ $findingCategoryLabel }}</p>
+                                                        @endif
+                                                        <h4>{{ $finding->title }}</h4>
+                                                    </div>
                                                     <span class="badge badge-warning">{{ __('ui.severity.'.$finding->severity) }}</span>
                                                 </div>
                                                 <dl>
@@ -518,6 +645,24 @@
                                                     <dt>{{ __('ui.observed') }}</dt>
                                                     <dd>{{ $finding->actual }}</dd>
                                                 </dl>
+                                                @if (is_string($finding->evidence['path'] ?? null))
+                                                    <p class="field-hint finding-location">{{ __('ui.audit.location') }} <code>{{ $finding->evidence['path'] }}{{ isset($finding->evidence['line']) ? ':'.$finding->evidence['line'] : '' }}</code></p>
+                                                @endif
+                                                @if (is_string($finding->evidence['remediation'] ?? null))
+                                                    <div class="finding-remediation">
+                                                        <h5>{{ __('ui.audit.remediation') }}</h5>
+                                                        <p>{{ $finding->evidence['remediation'] }}</p>
+                                                    </div>
+                                                @endif
+                                                @if (is_string($finding->evidence['suggested_change'] ?? null))
+                                                    <details class="evidence-details">
+                                                        <summary>{{ __('ui.audit.suggested_change') }}</summary>
+                                                        <pre>{{ $finding->evidence['suggested_change'] }}</pre>
+                                                    </details>
+                                                @endif
+                                                @if (is_string($advisoryUrl) && preg_match('~\Ahttps://(?:osv\.dev/vulnerability/[A-Za-z0-9._-]+|github\.com/advisories/GHSA-[A-Za-z0-9-]+|www\.cve\.org/CVERecord\?id=CVE-[0-9-]+)\z~', $advisoryUrl))
+                                                    <a class="text-link" href="{{ $advisoryUrl }}" target="_blank" rel="noopener noreferrer">{{ __('ui.audit.advisory') }}</a>
+                                                @endif
                                                 @if (is_string($finding->evidence['artifact'] ?? null) && preg_match('/\Abrowser-[a-zA-Z0-9-]+\.png\z/', $finding->evidence['artifact']))
                                                     <a class="text-link" href="{{ route('runs.evidence', [$run, $finding->evidence['artifact']]) }}" target="_blank" rel="noopener noreferrer">
                                                         <x-icon name="image" />
@@ -598,7 +743,10 @@
                                         <button class="history-item {{ $selectedRunId === $previous->id ? 'is-selected' : '' }}" type="button" wire:click="selectRun({{ $previous->id }})" wire:key="history-{{ $previous->id }}">
                                             <span>
                                                 <strong>{{ __('ui.run_number', ['number' => $previous->id]) }}</strong>
-                                                <span>{{ $previous->created_at->timezone(config('app.timezone'))->locale(app()->getLocale())->translatedFormat('d M, H:i') }}</span>
+                                                <x-local-time :date="$previous->created_at" :identity="'history-'.$previous->id" />
+                                                @if ($previous->advanced)
+                                                    <span>{{ __($previous->guidance ? 'ui.guided_run' : 'ui.automatic_run') }}</span>
+                                                @endif
                                             </span>
                                             <span class="history-status">{{ __('ui.status.'.$previous->status) }}</span>
                                         </button>

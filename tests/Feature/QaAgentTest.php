@@ -33,6 +33,155 @@ class QaAgentTest extends TestCase
         config()->set('autoqa.model_repair_timeout', 600);
     }
 
+    public function test_automatic_check_follows_only_an_observed_same_origin_link_and_saves_checkpoints_during_the_run(): void
+    {
+        $project = Project::factory()->local()->create(['repository_url' => null, 'website_url' => 'http://127.0.0.1:8080']);
+        $run = QaRun::factory()->for($project)->create(['automatic' => true]);
+        $home = 'http://127.0.0.1:8080';
+        $about = $home.'/about';
+        $snapshot = $this->automaticPage($home, 200, [
+            ['tag' => 'button', 'text' => 'Submit', 'read_only_url' => $home.'/submit'],
+            ['tag' => 'a', 'text' => 'Different site', 'read_only_url' => 'https://example.org/about'],
+            ['tag' => 'a', 'text' => 'Filtered query', 'read_only_url' => $home.'/settings?action=change'],
+            ['tag' => 'a', 'text' => 'About', 'read_only_url' => $about],
+        ]);
+        [$browser, $model, $github, $sandbox] = $this->automaticDependencies($run, $snapshot);
+        $model->shouldNotReceive('forUser');
+        $model->shouldNotReceive('decide');
+        $this->expectNoSourceRepair($github, $sandbox);
+        $browser->shouldReceive('act')->once()->ordered()->with('browser-session', ['tool' => 'assert_page'])
+            ->andReturnUsing(function () use ($run, $snapshot): array {
+                $observation = $run->steps()->where('kind', 'observe')->sole();
+                $this->assertSame('browser-example-1.png', $observation->data['preview_artifact']);
+                $this->assertSame('opened', $observation->data['message']);
+
+                return ['snapshot' => $snapshot, 'assertion' => ['type' => 'page', 'passed' => true],
+                    'network_errors' => [['status' => 500, 'url' => 'https://example.org/asset', 'main_document' => false]]];
+            });
+        $browser->shouldReceive('act')->once()->ordered()->with('browser-session', ['tool' => 'navigate', 'url' => $about])
+            ->andReturn(['snapshot' => $this->automaticPage($about, 200), 'preview_artifact' => 'browser-example-2.png']);
+        $browser->shouldReceive('act')->once()->ordered()->with('browser-session', ['tool' => 'assert_page'])
+            ->andReturnUsing(function () use ($run, $about): array {
+                $navigation = $run->steps()->where('data->action->tool', 'navigate')->sole();
+                $this->assertSame('browser-example-2.png', $navigation->data['preview_artifact']);
+                $this->assertSame('link', $navigation->data['message']);
+                $this->assertSame('About', $navigation->data['label']);
+
+                return ['snapshot' => $this->automaticPage($about, 200), 'assertion' => ['type' => 'page', 'passed' => true]];
+            });
+
+        app(QaAgent::class)->run($run->id);
+
+        $run->refresh();
+        $this->assertSame('completed', $run->status, (string) $run->error);
+        $this->assertSame('completed', $run->report['message']);
+        $this->assertSame('completed', $run->steps()->where('kind', 'result')->sole()->data['message']);
+        $this->assertSame([$home, $about], $run->report['checked_pages']);
+        $this->assertSame(2, $run->report['passed_assertions']);
+        $this->assertSame(0, $run->findings()->count());
+    }
+
+    public function test_automatic_website_only_check_reports_a_missing_link_with_browser_evidence(): void
+    {
+        $project = Project::factory()->local()->create(['repository_url' => null, 'website_url' => 'http://127.0.0.1:8080']);
+        $run = QaRun::factory()->for($project)->create(['automatic' => true]);
+        $home = 'http://127.0.0.1:8080';
+        $missing = $home.'/help';
+        $snapshot = $this->automaticPage($home, 200, [['tag' => 'a', 'text' => 'Help', 'read_only_url' => $missing]]);
+        [$browser, $model, $github, $sandbox] = $this->automaticDependencies($run, $snapshot);
+        $model->shouldNotReceive('decide');
+        $this->expectNoSourceRepair($github, $sandbox);
+        $browser->shouldReceive('act')->once()->ordered()->with('browser-session', ['tool' => 'assert_page'])
+            ->andReturn(['snapshot' => $snapshot, 'assertion' => ['type' => 'page', 'passed' => true]]);
+        $browser->shouldReceive('act')->once()->ordered()->with('browser-session', ['tool' => 'navigate', 'url' => $missing])
+            ->andReturn(['snapshot' => $this->automaticPage($missing, 404), 'preview_artifact' => 'browser-missing-2.png']);
+
+        app(QaAgent::class)->run($run->id);
+
+        $run->refresh();
+        $this->assertSame('report_ready', $run->status, (string) $run->error);
+        $this->assertSame('http_status', $run->report['message']);
+        $this->assertSame(['message' => 'http_status', 'document_status' => 404], $run->steps()->where('kind', 'result')->sole()->data);
+        $this->assertStringContainsString('HTTP 404', $run->report['summary']);
+        $this->assertSame($missing, $run->report['failure']['url']);
+        $this->assertSame('browser-missing-2.png', $run->findings()->sole()->evidence['artifact']);
+        $this->assertSame('A link led to a missing page', $run->findings()->sole()->title);
+    }
+
+    public function test_automatic_check_marks_an_inconclusive_document_as_blocked_without_a_repair(): void
+    {
+        $project = Project::factory()->local()->publishing()->create(['website_url' => 'http://127.0.0.1:8080']);
+        $run = QaRun::factory()->for($project)->create(['automatic' => true]);
+        $snapshot = $this->automaticPage($project->website_url, 200);
+        [$browser, $model, $github, $sandbox] = $this->automaticDependencies($run, $snapshot);
+        $browser->shouldReceive('act')->once()->with('browser-session', ['tool' => 'assert_page'])
+            ->andReturn(['snapshot' => $snapshot, 'assertion' => ['type' => 'page', 'passed' => false]]);
+        $model->shouldNotReceive('decide');
+        $this->expectNoSourceRepair($github, $sandbox);
+
+        app(QaAgent::class)->run($run->id);
+
+        $run->refresh();
+        $this->assertSame('blocked', $run->status, (string) $run->error);
+        $this->assertStringContainsString('could not verify', $run->report['summary']);
+        $this->assertSame(0, $run->report['passed_assertions']);
+        $this->assertSame(0, $run->findings()->count());
+    }
+
+    public function test_automatic_repair_reuses_the_observed_page_and_healthy_control_without_model_directed_browser_actions(): void
+    {
+        $project = Project::factory()->local()->publishing()->create(['website_url' => 'http://127.0.0.1:8080']);
+        $run = QaRun::factory()->for($project)->create(['automatic' => true]);
+        $home = 'http://127.0.0.1:8080';
+        $errorPage = $home.'/register';
+        $snapshot = $this->automaticPage($home, 200, [['tag' => 'a', 'text' => 'Registration', 'read_only_url' => $errorPage]]);
+        [$browser, $model, $github, $sandbox] = $this->automaticDependencies($run, $snapshot);
+        $files = $this->expectAutomaticRepairProposal($run, $model, $github, $errorPage);
+        $browser->shouldReceive('act')->once()->ordered()->with('browser-session', ['tool' => 'assert_page'])
+            ->andReturn(['snapshot' => $snapshot, 'assertion' => ['type' => 'page', 'passed' => true]]);
+        $navigation = ['tool' => 'navigate', 'url' => $errorPage];
+        $browser->shouldReceive('act')->once()->ordered()->with('browser-session', $navigation)
+            ->andReturn(['snapshot' => $this->automaticPage($errorPage, 500), 'preview_artifact' => 'browser-error-2.png']);
+        $sandbox->shouldReceive('ready')->once()->andReturnTrue();
+        $sandbox->shouldReceive('verify')->once()
+            ->withArgs(fn (QaRun $actualRun, array $changedFiles, string $test, array $plan): bool => $run->is($actualRun)
+                && $changedFiles === $files && $test === self::TEST_PATH
+                && $plan === [['tool' => 'assert_page', 'url' => $home], $navigation, ['tool' => 'assert_page', 'url' => $errorPage]]
+                && $actualRun->report['control_actions'] === [['tool' => 'assert_page', 'url' => $home]])
+            ->andReturn(['passed' => false]);
+        $this->expectNoPublication($github);
+
+        app(QaAgent::class)->run($run->id);
+
+        $run->refresh();
+        $this->assertSame('verification_failed', $run->status, (string) $run->error);
+        $this->assertSame($files, $run->patch_files);
+        $this->assertSame('GET', $run->report['failure']['method']);
+        $this->assertSame('browser-error-2.png', $run->findings()->sole()->evidence['artifact']);
+        $this->assertNull($run->pr_url);
+    }
+
+    public function test_automatic_repair_keeps_a_starting_page_patch_as_a_suggestion_without_a_healthy_control(): void
+    {
+        $project = Project::factory()->local()->publishing()->create(['website_url' => 'http://127.0.0.1:8080']);
+        $run = QaRun::factory()->for($project)->create(['automatic' => true]);
+        $home = 'http://127.0.0.1:8080';
+        [$browser, $model, $github, $sandbox] = $this->automaticDependencies($run, $this->automaticPage($home, 500));
+        $files = $this->expectAutomaticRepairProposal($run, $model, $github, $home);
+        $browser->shouldNotReceive('act');
+        $sandbox->shouldNotReceive('ready');
+        $sandbox->shouldNotReceive('verify');
+        $this->expectNoPublication($github);
+
+        app(QaAgent::class)->run($run->id);
+
+        $run->refresh();
+        $this->assertSame('suggestion_ready', $run->status, (string) $run->error);
+        $this->assertSame($files, $run->patch_files);
+        $this->assertStringContainsString('separate healthy page', $run->report['summary']);
+        $this->assertNull($run->pr_url);
+    }
+
     public function test_completes_a_journey_after_a_deterministic_assertion_passes(): void
     {
         $project = Project::factory()->local()->create();
@@ -871,6 +1020,50 @@ class QaAgentTest extends TestCase
         $model->shouldReceive('forUser')->once()->withArgs(fn ($user) => $user->is($project->user))->andReturnSelf()->byDefault();
 
         return [$browser, $model, $this->mock(GitHubAppClient::class), $this->mock(RepairSandbox::class)];
+    }
+
+    /** @return array{MockInterface, MockInterface, MockInterface, MockInterface} */
+    private function automaticDependencies(QaRun $run, array $snapshot): array
+    {
+        $project = $run->project;
+        config()->set('autoqa.local_targets', ['http://127.0.0.1:8080']);
+        $browser = $this->mock(BrowserWorker::class);
+        $browser->shouldReceive('start')->once()->with($project->website_url, 'local', true)
+            ->andReturn(['session_id' => 'browser-session', 'snapshot' => $snapshot, 'preview_artifact' => 'browser-example-1.png']);
+        $browser->shouldReceive('close')->once()->with('browser-session')->andReturn(['closed' => true, 'artifacts' => []]);
+
+        return [$browser, $this->mock(ModelClient::class), $this->mock(GitHubAppClient::class), $this->mock(RepairSandbox::class)];
+    }
+
+    /** @return array{url: string, document_status: int, source_sha: string, elements: array} */
+    private function automaticPage(string $url, int $status, array $elements = []): array
+    {
+        return ['url' => $url, 'document_status' => $status, 'source_sha' => self::BASE_SHA, 'elements' => $elements];
+    }
+
+    /** @return array<string, string> */
+    private function expectAutomaticRepairProposal(QaRun $run, MockInterface $model, MockInterface $github, string $failedPage): array
+    {
+        $project = $run->project;
+        config(['repository-access.grants' => [$project->user_id => ['example/laravel-demo']]]);
+        $files = [self::SOURCE_PATH => '<?php // Repair observed page output', self::TEST_PATH => '<?php // Exercise the failing GET page'];
+        $model->shouldReceive('forUser')->once()->withArgs(fn ($user): bool => $user->is($project->user))->andReturnSelf();
+        $model->shouldReceive('ready')->once()->andReturnTrue();
+        $model->shouldReceive('decide')->once()->ordered()->andReturn(['files' => [self::SOURCE_PATH]]);
+        $model->shouldReceive('decide')->once()->ordered()->andReturnUsing(function (string $instruction, array $context) use ($files, $failedPage): array {
+            $this->assertSame('GET', $context['failure']['method']);
+            $this->assertSame($failedPage, $context['failure']['url']);
+            $this->assertArrayNotHasKey('qa_identity', $context);
+            $this->assertArrayHasKey('observed_browser_actions', $context);
+
+            return ['diagnosis' => 'The page contained a missing dependency.', 'patch_files' => $files, 'regression_test' => self::TEST_PATH];
+        });
+        $github->shouldReceive('inspectRepository')->once()->with($project->repository_url)->andReturn(['default_branch' => 'main', 'head_sha' => self::BASE_SHA]);
+        $github->shouldReceive('repositoryTree')->once()->with($project->repository_url, self::BASE_SHA)->andReturn([['path' => self::SOURCE_PATH, 'size' => 100]]);
+        $github->shouldReceive('readFiles')->once()->with($project->repository_url, self::BASE_SHA, [self::SOURCE_PATH])
+            ->andReturn([self::SOURCE_PATH => '<?php // Existing implementation']);
+
+        return $files;
     }
 
     private function snapshot(Project $project): array

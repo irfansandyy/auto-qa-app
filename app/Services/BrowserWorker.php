@@ -25,9 +25,9 @@ class BrowserWorker
         }
     }
 
-    public function start(string $url, string $mode = 'public'): array
+    public function start(string $url, string $mode = 'public', bool $readOnly = false): array
     {
-        return $this->request('POST', '/sessions', ['url' => $url, 'mode' => $mode]);
+        return $this->request('POST', '/sessions', ['url' => $url, 'mode' => $mode, ...($readOnly ? ['read_only' => true] : [])]);
     }
 
     public function snapshot(string $sessionId): array
@@ -102,6 +102,10 @@ class BrowserWorker
             if (! is_string($filename) || ! preg_match('/\Abrowser-[a-zA-Z0-9-]+\.(png|zip)\z/', $filename)) {
                 throw new RuntimeException('The browser worker returned an unsafe evidence filename.');
             }
+        }
+        if (isset($result['preview_artifact']) && (! is_string($result['preview_artifact'])
+            || ! preg_match('/\Abrowser-[a-zA-Z0-9-]+\.png\z/', $result['preview_artifact']))) {
+            throw new RuntimeException('The browser worker returned an unsafe evidence filename.');
         }
 
         return $result;

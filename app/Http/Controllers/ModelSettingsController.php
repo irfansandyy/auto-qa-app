@@ -19,7 +19,7 @@ class ModelSettingsController extends Controller
 
         $settings = $request->validate([
             'model_provider' => ['required', 'string', Rule::in(ModelClient::PROVIDERS)],
-            'model_name' => ['nullable', 'required_unless:model_provider,local', 'string', 'max:150', 'regex:/\A[A-Za-z0-9][A-Za-z0-9._:\/-]{0,149}\z/'],
+            'model_name' => ['nullable', 'required_unless:model_provider,local,server_gemini', 'string', 'max:150', 'regex:/\A[A-Za-z0-9][A-Za-z0-9._:\/-]{0,149}\z/'],
             'model_base_url' => ['nullable', 'required_if:model_provider,custom', 'string', 'max:2048', 'url:https'],
             'forget_api_key' => ['sometimes', 'boolean'],
         ], [], [
@@ -36,6 +36,7 @@ class ModelSettingsController extends Controller
 
         $user = $request->user();
         $provider = $settings['model_provider'];
+        $usesServerCredentials = in_array($provider, ModelClient::SERVER_PROVIDERS, true);
         $baseUrl = $provider === 'custom' ? rtrim($settings['model_base_url'], '/') : null;
         if ($baseUrl !== null) {
             try {
@@ -50,16 +51,16 @@ class ModelSettingsController extends Controller
         if (is_string($apiKey) && $apiKey !== '') {
             $key = $apiKey;
         }
-        if ($request->boolean('forget_api_key') || $provider === 'local') {
+        if ($request->boolean('forget_api_key') || $usesServerCredentials) {
             $key = null;
         }
-        if ($provider !== 'local' && $key === null && ! $request->boolean('forget_api_key')) {
+        if (! $usesServerCredentials && $key === null && ! $request->boolean('forget_api_key')) {
             throw ValidationException::withMessages(['model_api_key' => __('model-settings.key_required')]);
         }
 
         $user->update([
             'model_provider' => $provider,
-            'model_name' => $provider === 'local' ? null : $settings['model_name'],
+            'model_name' => $usesServerCredentials ? null : $settings['model_name'],
             'model_base_url' => $baseUrl,
             'model_api_key' => $key,
         ]);

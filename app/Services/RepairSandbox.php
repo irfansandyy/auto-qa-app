@@ -41,15 +41,19 @@ class RepairSandbox
                 throw new InvalidArgumentException('Verification requires the exact deployed source commit.');
             }
             $this->validatePatch($files, $test);
-            $this->validatePlan($actions, 45, false);
+            $readOnly = $run->automatic === true;
+            $this->validatePlan($actions, 45, false, $readOnly);
             $control = $run->report['control_actions'] ?? [];
-            $this->validatePlan($control, 25);
+            $this->validatePlan($control, 25, ! $readOnly, $readOnly);
             $preview = $this->previewOrigin();
             $source = $run->project->website_url;
             foreach ([...$actions, ...$control] as $action) {
                 if (isset($action['url'])) {
                     $this->previewUrl($action['url'], $source, $preview);
                 }
+            }
+            if ($readOnly && end($actions)['url'] === end($control)['url']) {
+                throw new InvalidArgumentException('Automatic verification requires a different page for the independent control.');
             }
 
             $lock = Cache::lock('autoqa-repair-sandbox', 3600);
@@ -114,7 +118,7 @@ class RepairSandbox
                 ])->forever()->start([PHP_BINARY, '-S', '127.0.0.1:'.parse_url($preview, PHP_URL_PORT), base_path('sandbox/preview-proxy.php')]);
                 try {
                     $this->waitForPreview($preview, $result);
-                    $result['checks'][$gate] = $this->replay($plan, $source, $preview);
+                    $result['checks'][$gate] = $this->replay($plan, $source, $preview, $readOnly);
                     $result[$gate] = $result['checks'][$gate]['passed'] === true;
                     if (! $result[$gate]) {
                         throw new RuntimeException('The patched preview did not satisfy '.$gate.'.');
@@ -196,17 +200,20 @@ class RepairSandbox
         throw new RuntimeException('The patched preview did not become ready with the expected source and patch identity.');
     }
 
-    private function replay(array $actions, string $source, string $preview): array
+    private function replay(array $actions, string $source, string $preview, bool $readOnly): array
     {
         $session = null;
         $assertions = 0;
         $password = Str::random(24).'A1!';
         $deadline = microtime(true) + min(180, max(30, (int) config('autoqa.runner_timeout', 240)));
         try {
-            $started = $this->browser->start($this->previewUrl($source, $source, $preview), 'local');
+            $entryUrl = $this->previewUrl($source, $source, $preview);
+            $started = $readOnly
+                ? $this->browser->start($entryUrl, 'local', true)
+                : $this->browser->start($entryUrl, 'local');
             $session = $started['session_id'];
             $snapshot = $started['snapshot'];
-            $this->assertNoServerErrors($started);
+            $this->assertNoServerErrors($started, $readOnly);
             foreach ($actions as $recorded) {
                 if (microtime(true) > $deadline) {
                     throw new RuntimeException('The deterministic browser replay exceeded its time budget.');
@@ -235,8 +242,8 @@ class RepairSandbox
                 }
                 $observation = $this->browser->act($session, $action);
                 $snapshot = $observation['snapshot'];
-                $this->assertNoServerErrors($observation);
-                if (in_array($action['tool'], ['assert_text', 'assert_url'], true)) {
+                $this->assertNoServerErrors($observation, $readOnly);
+                if (in_array($action['tool'], ['assert_text', 'assert_url', 'assert_page'], true)) {
                     if (($observation['assertion']['passed'] ?? null) !== true) {
                         throw new RuntimeException('The patched browser scenario failed its deterministic assertion.');
                     }
@@ -255,14 +262,17 @@ class RepairSandbox
         }
     }
 
-    private function validatePlan(mixed $actions, int $limit, bool $requireInteraction = true): void
+    private function validatePlan(mixed $actions, int $limit, bool $requireInteraction, bool $readOnly): void
     {
         if (! is_array($actions) || $actions === [] || count($actions) > $limit) {
             throw new InvalidArgumentException('Both replay and independent control need a bounded deterministic browser scenario.');
         }
+        $allowed = $readOnly
+            ? ['navigate', 'assert_page']
+            : ['click', 'fill', 'select', 'press', 'navigate', 'assert_text', 'assert_url'];
         $interaction = false;
         foreach ($actions as $action) {
-            if (! is_array($action) || ! in_array($action['tool'] ?? '', ['click', 'fill', 'select', 'press', 'navigate', 'assert_text', 'assert_url'], true)) {
+            if (! is_array($action) || ! in_array($action['tool'] ?? '', $allowed, true)) {
                 throw new InvalidArgumentException('The browser verification plan contains an unsupported action.');
             }
             $tool = $action['tool'];
@@ -278,10 +288,10 @@ class RepairSandbox
                 }
             }
             $key = match ($tool) {
-                'fill', 'select' => 'value', 'press' => 'key', 'navigate', 'assert_url' => 'url', 'assert_text' => 'text', default => null,
+                'fill', 'select' => 'value', 'press' => 'key', 'navigate', 'assert_page', 'assert_url' => 'url', 'assert_text' => 'text', default => null,
             };
             if ($key !== null && (! is_string($action[$key] ?? null) || strlen($action[$key]) > 2000
-                || ($tool === 'assert_text' && trim($action[$key]) === ''))) {
+                || (in_array($tool, ['assert_page', 'assert_text'], true) && trim($action[$key]) === ''))) {
                 throw new InvalidArgumentException('A browser verification action has invalid arguments.');
             }
             if ($tool === 'press' && ! in_array($action['key'], ['Enter', 'Tab', 'Escape', 'Space', 'ArrowDown', 'ArrowUp'], true)) {
@@ -289,7 +299,8 @@ class RepairSandbox
             }
             $interaction = $interaction || in_array($tool, ['click', 'fill', 'select', 'press'], true);
         }
-        if (($requireInteraction && ! $interaction) || ! in_array(end($actions)['tool'], ['assert_text', 'assert_url'], true)) {
+        $assertions = $readOnly ? ['assert_page'] : ['assert_text', 'assert_url'];
+        if (($requireInteraction && ! $interaction) || ! in_array(end($actions)['tool'], $assertions, true)) {
             throw new InvalidArgumentException('Each browser scenario must interact with the journey and end with an explicit success assertion.');
         }
     }
@@ -348,8 +359,17 @@ class RepairSandbox
         return $preview.($parts['path'] ?? '/').(isset($parts['query']) ? '?'.$parts['query'] : '').(isset($parts['fragment']) ? '#'.$parts['fragment'] : '');
     }
 
-    private function assertNoServerErrors(array $result): void
+    private function assertNoServerErrors(array $result, bool $readOnly): void
     {
+        if ($readOnly) {
+            $status = $result['snapshot']['document_status'] ?? null;
+            if (! is_int($status) || $status < 200 || $status >= 300) {
+                throw new RuntimeException('The patched browser replay could not load a successful page.');
+            }
+
+            return;
+        }
+
         foreach ($result['network_errors'] ?? [] as $error) {
             if (($error['status'] ?? 0) >= 500 || ($error['blocked'] ?? false) || isset($error['error'])) {
                 throw new RuntimeException('The patched browser replay encountered a server failure or blocked network request.');

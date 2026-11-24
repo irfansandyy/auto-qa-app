@@ -113,6 +113,54 @@ class PreferencesTest extends TestCase
             ->assertSee('Pengaturan')->assertSee('Bahasa')->assertSee('Tampilan')->assertSee('Terang')->assertSee('Gelap');
     }
 
+    public function test_automatic_run_shows_localized_browser_steps_and_the_latest_screenshot(): void
+    {
+        $operator = User::factory()->create(['locale' => 'id']);
+        $project = Project::factory()->for($operator)->create();
+        $run = QaRun::factory()->for($project)->create([
+            'automatic' => true,
+            'status' => 'completed',
+            'report' => ['message' => 'completed', 'summary' => 'Stored English result'],
+        ]);
+        $name = 'browser-automatic-step.png';
+        $run->steps()->create([
+            'sequence' => 1,
+            'kind' => 'action',
+            'summary' => 'Stored English step',
+            'data' => ['message' => 'link', 'label' => 'Panduan', 'preview_artifact' => $name],
+        ]);
+
+        $this->actingAs($operator)->get(route('dashboard'))
+            ->assertOk()
+            ->assertSee('Halaman yang diperiksa berhasil dimuat dan menampilkan konten.')
+            ->assertSee('Tautan “Panduan” telah dibuka.')
+            ->assertSee('Tangkapan layar terbaru · Langkah 1')
+            ->assertSee(route('runs.evidence', [$run, $name]))
+            ->assertDontSee('Stored English step');
+    }
+
+    public function test_dashboard_gives_the_browser_absolute_timestamps_for_local_display(): void
+    {
+        $operator = User::factory()->create(['locale' => 'id']);
+        $project = Project::factory()->for($operator)->create();
+        QaRun::factory()->for($project)->create([
+            'status' => 'completed',
+            'created_at' => '2026-11-23 23:45:00',
+            'finished_at' => '2026-11-24 00:02:00',
+        ]);
+
+        $response = $this->actingAs($operator)->get(route('dashboard'));
+
+        $response->assertOk()
+            ->assertSee('Dibuat')
+            ->assertSee('Selesai')
+            ->assertSee('datetime="2026-11-23T23:45:00+00:00"', false)
+            ->assertSee('datetime="2026-11-24T00:02:00+00:00"', false)
+            ->assertSee('data-time-only="true"', false)
+            ->assertSee('23 Nov, 23:45 UTC')
+            ->assertSee('00:02 UTC');
+    }
+
     public function test_guest_auth_pages_use_valid_language_and_theme_cookies(): void
     {
         User::factory()->create();

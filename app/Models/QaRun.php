@@ -11,11 +11,17 @@ class QaRun extends Model
 {
     use HasFactory;
 
+    public const AUTOMATIC_GOAL = 'Check the starting page and a small sample of visible same-site links.';
+
+    public const AUTOMATIC_EXPECTED_BEHAVIOR = 'The checked pages load and render without server errors.';
+
+    public const ADVANCED_GOAL = 'Review the website at desktop and mobile widths, its public response configuration, and the approved repository where available.';
+
     protected $guarded = ['id'];
 
     protected function casts(): array
     {
-        return ['patch_files' => 'array', 'verification' => 'array', 'report' => 'array',
+        return ['automatic' => 'boolean', 'advanced' => 'boolean', 'patch_files' => 'array', 'verification' => 'array', 'report' => 'array',
             'started_at' => 'datetime', 'finished_at' => 'datetime'];
     }
 

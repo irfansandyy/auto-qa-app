@@ -53,6 +53,7 @@ test('actions reject stale references, arbitrary evaluation and unsafe keys', ()
   assert.throws(() => validateAction({ tool: 'click', id: 'e1-1' }, refs), /stale/);
   assert.throws(() => validateAction({ tool: 'evaluate', code: 'fetch("http://localhost")' }, refs), /Unknown browser tool/);
   assert.throws(() => validateAction({ tool: 'press', id: 'e2-1', key: 'Control+L' }, refs), /Only Enter/);
+  assert.throws(() => validateAction({ tool: 'inspect_frontend', url: 'https://outside.example/' }), /only accepts its tool name/);
   assert.throws(() => validateAction({ tool: 'fill', id: 'e2-1', value: 'x'.repeat(4097) }, refs), /4096/);
   assert.throws(() => validateAction({ tool: 'assert_text', text: '' }, refs), /assertion text/);
   assert.equal(validateAction({ tool: 'screenshot' }, refs).tool, 'screenshot');

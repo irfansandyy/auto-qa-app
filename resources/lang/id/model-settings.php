@@ -1,6 +1,10 @@
 <?php
 
 return [
+    'server_gemini' => 'Google AI Studio (dikelola server)',
+    'server_gemini_help' => 'Dimulai dengan Google AI Studio dan dapat beralih ke Senopati ITS jika dikonfigurasi. Layanan yang digunakan menerima konten halaman dan kode terkait selama pengujian.',
+    'gemini_exhausted' => 'Koneksi model yang dikelola server mencapai batas atau tidak tersedia. Coba lagi nanti atau pilih koneksi model lain di Pengaturan.',
+    'senopati_unreachable' => 'Koneksi cadangan tidak dapat menjangkau Senopati ITS. Coba lagi nanti atau pilih koneksi model lain di Pengaturan.',
     'heading' => 'Koneksi model',
     'description' => 'Gunakan model server, atau hubungkan penyedia AI dengan kunci API Anda sendiri.',
     'provider' => 'Penyedia',

@@ -42,7 +42,8 @@ test('worker startup loads the configured browser cache before Playwright resolv
   const reserve = createServer({ token, manager: {} });
   try {
     await mkdir(workerDirectory);
-    await Promise.all(['runner.mjs', 'policy.mjs', 'browser.mjs', 'server.mjs'].map((filename) => copyFile(join(sourceDirectory, filename), join(workerDirectory, filename))));
+    await Promise.all(['runner.mjs', 'policy.mjs', 'browser.mjs', 'frontend.mjs', 'server.mjs']
+      .map((filename) => copyFile(join(sourceDirectory, filename), join(workerDirectory, filename))));
     await symlink(join(sourceDirectory, 'node_modules'), join(workerDirectory, 'node_modules'), 'dir');
     const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', "import { chromium } from 'playwright'; process.stdout.write(chromium.executablePath());"], {
       cwd: workerDirectory, env: { ...environment, PLAYWRIGHT_BROWSERS_PATH: cacheDirectory },
@@ -103,6 +104,18 @@ test('session creation receives only JSON objects and is dispatched once', async
     assert.equal(response.status, 201);
     assert.equal((await response.json()).session_id, 'session-1');
     assert.deepEqual(calls, [{ url: 'http://localhost:8080/', mode: 'local' }]);
+  });
+});
+
+test('sessions accept only a boolean read-only option', async () => {
+  await withServer(async (base, calls) => {
+    const headers = { authorization: 'Bearer '+token, 'content-type': 'application/json' };
+    const url = 'http://localhost:8080/';
+    const invalid = await fetch(base + '/sessions', { method: 'POST', headers, body: JSON.stringify({ url, read_only: 'false' }) });
+    assert.equal(invalid.status, 400);
+    const valid = await fetch(base + '/sessions', { method: 'POST', headers, body: JSON.stringify({ url, read_only: true }) });
+    assert.equal(valid.status, 201);
+    assert.deepEqual(calls, [{ url, read_only: true }]);
   });
 });
 

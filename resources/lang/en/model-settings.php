@@ -1,6 +1,10 @@
 <?php
 
 return [
+    'server_gemini' => 'Google AI Studio (managed)',
+    'server_gemini_help' => 'Starts with Google AI Studio and can fall back to Senopati ITS when configured. The selected service receives page content and relevant code during runs.',
+    'gemini_exhausted' => 'The managed model connections are at their limits or unavailable. Try again later or choose another model connection in Settings.',
+    'senopati_unreachable' => 'The managed fallback could not reach Senopati ITS. Try again later or choose another model connection in Settings.',
     'heading' => 'Model connection',
     'description' => 'Use the server model, or connect an AI provider with your own API key.',
     'provider' => 'Provider',

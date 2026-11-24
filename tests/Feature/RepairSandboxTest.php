@@ -71,6 +71,74 @@ class RepairSandboxTest extends TestCase
         Process::assertNothingRan();
     }
 
+    public function test_automatic_verification_checks_the_original_page_and_healthy_control_in_read_only_sessions(): void
+    {
+        $this->fakeProcesses();
+        $this->fakePreviewHealth();
+        $run = $this->runModel();
+        $run->automatic = true;
+        $run->report = ['control_actions' => [['tool' => 'assert_page', 'url' => 'https://example.com/register']]];
+        $loaded = ['snapshot' => ['document_status' => 200], 'network_errors' => [['blocked' => true]]];
+        $assertion = [...$loaded, 'assertion' => ['passed' => true]];
+        $browser = Mockery::mock(BrowserWorker::class);
+        $browser->shouldReceive('start')->with('http://127.0.0.1:8081/register', 'local', true)->twice()->andReturn(
+            [...$loaded, 'session_id' => 'original'], [...$loaded, 'session_id' => 'control']);
+        $browser->shouldReceive('act')->with('original', ['tool' => 'navigate', 'url' => 'http://127.0.0.1:8081/help'])->once()->andReturn($loaded);
+        $browser->shouldReceive('act')->with('original', ['tool' => 'assert_page', 'url' => 'http://127.0.0.1:8081/help'])->once()->andReturn($assertion);
+        $browser->shouldReceive('act')->with('control', ['tool' => 'assert_page', 'url' => 'http://127.0.0.1:8081/register'])->once()->andReturn($assertion);
+        $browser->shouldReceive('close')->with('original')->once()->andReturn([]);
+        $browser->shouldReceive('close')->with('control')->once()->andReturn([]);
+        $paths = [];
+        $sandbox = new RepairSandbox($this->archiveClient($paths), $browser);
+
+        $result = $sandbox->verify($run, $this->patchFiles(), $this->regressionPath(), [
+            ['tool' => 'navigate', 'url' => 'https://example.com/help'], ['tool' => 'assert_page', 'url' => 'https://example.com/help'],
+        ]);
+
+        $this->assertTrue($result['passed'], $result['message']);
+        $this->assertSame(1, $result['checks']['original_replay']['assertions']);
+        $this->assertSame(1, $result['checks']['control_replay']['assertions']);
+    }
+
+    public function test_automatic_verification_requires_an_exact_url_and_a_different_control_page(): void
+    {
+        Process::fake();
+        $run = $this->runModel();
+        $run->automatic = true;
+        $assertStartingPage = ['tool' => 'assert_page', 'url' => 'https://example.com/register'];
+        $run->report = ['control_actions' => [$assertStartingPage]];
+        $sandbox = new RepairSandbox(Mockery::mock(GitHubAppClient::class), Mockery::mock(BrowserWorker::class));
+
+        $missingUrl = $sandbox->verify($run, $this->patchFiles(), $this->regressionPath(), [['tool' => 'assert_page']]);
+        $duplicatePage = $sandbox->verify($run, $this->patchFiles(), $this->regressionPath(), [$assertStartingPage]);
+
+        $this->assertFalse($missingUrl['passed']);
+        $this->assertStringContainsString('invalid arguments', $missingUrl['message']);
+        $this->assertFalse($duplicatePage['passed']);
+        $this->assertStringContainsString('different page', $duplicatePage['message']);
+        Process::assertNothingRan();
+    }
+
+    public function test_automatic_verification_refuses_a_form_interaction_before_opening_a_browser(): void
+    {
+        Process::fake();
+        $run = $this->runModel();
+        $run->automatic = true;
+        $run->report = ['control_actions' => [['tool' => 'assert_page']]];
+        $github = Mockery::mock(GitHubAppClient::class);
+        $github->shouldNotReceive('archiveSnapshot');
+        $browser = Mockery::mock(BrowserWorker::class);
+        $browser->shouldNotReceive('start');
+
+        $result = (new RepairSandbox($github, $browser))->verify($run, $this->patchFiles(), $this->regressionPath(), [
+            $this->original()[0], ['tool' => 'assert_page'],
+        ]);
+
+        $this->assertFalse($result['passed']);
+        $this->assertStringContainsString('unsupported action', $result['message']);
+        Process::assertNothingRan();
+    }
+
     public function test_an_unavailable_docker_image_fails_without_reaching_github(): void
     {
         Process::fake(['*docker*image*inspect*' => Process::result(errorOutput: 'Cannot connect to Docker', exitCode: 1)]);

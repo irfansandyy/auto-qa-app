@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BrowserManager } from '../browser.mjs';
+import { inspectHardening } from '../frontend.mjs';
 import { createTargetPolicy, parseLocalTargets } from '../policy.mjs';
 
 function browserFixture() {
@@ -111,4 +112,44 @@ test('bounded logs still return new errors after the ring fills', async () => {
     assert.deepEqual(result.console_errors, ['new-error']);
     assert.equal(session.console_errors.length, 120);
   } finally { await manager.shutdown(); }
+});
+
+test('failed automatic previews do not interrupt a browser session', async () => {
+  const { manager, page } = browserFixture();
+  page.screenshot = async () => { throw new Error('Capture timed out'); };
+  try {
+    const { session_id, preview_artifact, snapshot } = await manager.start({
+      url: 'http://localhost:8080/', mode: 'local', read_only: true,
+    });
+    assert.equal(preview_artifact, undefined);
+    assert.equal(snapshot.title, 'Registration');
+    assert.equal((await manager.act(session_id, { tool: 'assert_text', text: 'Welcome' })).assertion.passed, true);
+    assert.equal((await manager.close(session_id)).closed, true);
+  } finally { await manager.shutdown(); }
+});
+
+test('hardening review exposes allowlisted positive signals only for the rendered document response', async () => {
+  const headers = {
+    'strict-transport-security': 'max-age=3600; includeSubDomains',
+    'x-content-type-options': 'nosniff',
+    'content-security-policy': 'frame-ancestors *',
+    'x-frame-options': 'ALLOW-FROM https://example.test',
+  };
+  const queried = [];
+  const response = {
+    url: () => 'https://owned.example/page',
+    async headerValue(name) { queried.push(name); return headers[name]; },
+  };
+  assert.equal(await inspectHardening(response, 'https://owned.example/other'), null);
+  assert.deepEqual(queried, []);
+  assert.deepEqual(await inspectHardening(response, 'https://owned.example/page#content'), {
+    https: true, hsts: true, nosniff: true, csp: true, frame_restriction: false,
+  });
+  assert.deepEqual(queried, Object.keys(headers));
+
+  headers['strict-transport-security'] = 'max-age=0';
+  headers['x-frame-options'] = 'SAMEORIGIN';
+  assert.deepEqual(await inspectHardening(response, 'https://owned.example/page'), {
+    https: true, hsts: false, nosniff: true, csp: true, frame_restriction: true,
+  });
 });

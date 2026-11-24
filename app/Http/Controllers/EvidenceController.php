@@ -41,6 +41,10 @@ class EvidenceController extends Controller
             return true;
         }
 
+        if (str_ends_with($filename, '.png') && $run->steps()->where('data->preview_artifact', $filename)->exists()) {
+            return true;
+        }
+
         $artifacts = $run->report['artifacts'] ?? [];
         if (! is_array($artifacts)) {
             return false;

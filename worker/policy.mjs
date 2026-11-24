@@ -104,8 +104,11 @@ export function assertSameOrigin(value, origin) {
 
 export function validateAction(action, refs = new Set()) {
   if (!action || typeof action !== 'object' || Array.isArray(action)) throw new PolicyError('A browser action object is required.');
-  const tools = ['click', 'fill', 'select', 'press', 'navigate', 'assert_text', 'assert_url', 'screenshot', 'finish'];
+  const tools = ['click', 'fill', 'select', 'press', 'navigate', 'assert_text', 'assert_url', 'assert_page', 'inspect_frontend', 'screenshot', 'finish'];
   if (!tools.includes(action.tool)) throw new PolicyError(`Unknown browser tool. Allowed tools: ${tools.join(', ')}.`);
+  if (action.tool === 'inspect_frontend' && Object.keys(action).length !== 1) {
+    throw new PolicyError('The front-end check only accepts its tool name.');
+  }
   if (['click', 'fill', 'select'].includes(action.tool) || (action.tool === 'press' && action.id !== undefined)) {
     if (typeof action.id !== 'string' || !refs.has(action.id)) throw new PolicyError('The element reference is missing or stale. Read a fresh snapshot.');
   }
@@ -115,11 +118,27 @@ export function validateAction(action, refs = new Set()) {
   if (action.tool === 'press' && !['Enter', 'Tab', 'Escape', 'Space', 'ArrowDown', 'ArrowUp'].includes(action.key)) {
     throw new PolicyError('Only Enter, Tab, Escape, Space, ArrowDown, and ArrowUp keys are allowed.');
   }
-  if (action.tool === 'navigate' || action.tool === 'assert_url') parseHttpUrl(action.url);
+  if (action.tool === 'navigate' || action.tool === 'assert_url' || (action.tool === 'assert_page' && action.url !== undefined)) {
+    parseHttpUrl(action.url);
+  }
   if (action.tool === 'assert_text' && (typeof action.text !== 'string' || !action.text.trim() || action.text.length > 1000)) {
     throw new PolicyError('The assertion text must contain 1–1000 characters.');
   }
   return action;
+}
+
+export function readOnlyLink(value, label, origin) {
+  try {
+    const url = assertSameOrigin(value, origin);
+    const path = decodeURIComponent(url.pathname);
+    const sensitive = /(?:^|[^\p{L}\p{N}])(?:admin|delete|destroy|remove|sign[ -]?out|log[ -]?out|unsubscribe|revoke|reset|confirm|activate|checkout|pay|purchase|buy|grant|impersonate|hapus|keluar|bayar|beli)(?:$|[^\p{L}\p{N}])/iu;
+    // Only links with an ordinary route can be followed without interacting
+    // with the page or carrying query, fragment, or download parameters.
+    if (url.search || url.hash || !/^[\p{L}\p{N}\p{M}/_.-]+$/u.test(path) || sensitive.test(path) || sensitive.test(label)) return null;
+    return url.href;
+  } catch {
+    return null;
+  }
 }
 
 export function redactUrl(value) {

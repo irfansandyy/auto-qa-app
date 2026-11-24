@@ -33,7 +33,11 @@ export function createServer({ token, manager }) {
     try {
       const path = new URL(request.url, 'http://worker.invalid').pathname;
       if (request.method === 'GET' && path === '/health') return send(200, await manager.health());
-      if (request.method === 'POST' && path === '/sessions') return send(201, await manager.start(await readJson(request)));
+      if (request.method === 'POST' && path === '/sessions') {
+        const settings = await readJson(request);
+        if ('read_only' in settings && typeof settings.read_only !== 'boolean') throw new PolicyError('Read-only mode must be a boolean.', 400);
+        return send(201, await manager.start(settings));
+      }
       const match = path.match(/^\/sessions\/([a-zA-Z0-9-]+)(\/action)?$/);
       if (!match) return send(404, { error: 'Browser worker endpoint was not found.' });
       const id = match[1];

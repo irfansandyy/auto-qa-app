@@ -44,14 +44,27 @@ class GitHubAppClient
     /** @return array<string, string> */
     public function readFiles(string $repositoryUrl, string $ref, array $paths): array
     {
+        return $this->readBoundedFiles($repositoryUrl, $ref, $paths,
+            (int) config('github.max_read_file_bytes', 65536), (int) config('github.max_read_total_bytes', 262144));
+    }
+
+    /** @return array<string, string> */
+    public function readReviewLockfiles(string $repositoryUrl, string $sha): array
+    {
+        $this->assertSha($sha);
+
+        return $this->readBoundedFiles($repositoryUrl, $sha, ['composer.lock', 'package-lock.json', 'npm-shrinkwrap.json'], 1_000_000, 3_000_000);
+    }
+
+    /** @return array<string, string> */
+    private function readBoundedFiles(string $repositoryUrl, string $ref, array $paths, int $maxFile, int $maxTotal): array
+    {
         $this->assertRef($ref);
         $repository = RepositoryUrl::parse($repositoryUrl);
         $access = $this->installationAccess($repository);
         $result = [];
         $total = 0;
         $trees = [];
-        $maxFile = (int) config('github.max_read_file_bytes', 65536);
-        $maxTotal = (int) config('github.max_read_total_bytes', 262144);
 
         foreach (array_slice(array_unique(array_filter($paths, 'is_string')), 0, 20) as $path) {
             if (! is_string($path) || ! $this->safePath($path)) {

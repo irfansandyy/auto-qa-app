@@ -38,6 +38,21 @@ class BrowserWorkerTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_automatic_session_requests_read_only_mode_and_exposes_the_first_preview(): void
+    {
+        Http::fake(['http://127.0.0.1:3001/sessions' => Http::response([
+            'session_id' => 'session-1',
+            'snapshot' => ['url' => 'http://localhost:8080/', 'document_status' => 200],
+            'preview_artifact' => 'browser-abc-preview-1.png',
+        ], 201)]);
+
+        $result = (new BrowserWorker)->start('http://localhost:8080/', 'local', true);
+
+        $this->assertSame('browser-abc-preview-1.png', $result['preview_artifact']);
+        $this->assertSame(200, $result['snapshot']['document_status']);
+        Http::assertSent(fn ($request) => $request['read_only'] === true && $request['mode'] === 'local');
+    }
+
     public function test_health_reports_an_unavailable_worker(): void
     {
         Http::fake(['http://127.0.0.1:3001/health' => Http::failedConnection()]);
@@ -97,5 +112,14 @@ class BrowserWorkerTest extends TestCase
         $this->expectExceptionMessage('unsafe evidence filename');
 
         (new BrowserWorker)->screenshot('session-1');
+    }
+
+    public function test_rejects_a_non_image_preview_returned_by_the_worker(): void
+    {
+        Http::fake(['http://127.0.0.1:3001/sessions' => Http::response(['preview_artifact' => 'browser-session-trace.zip'], 201)]);
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('unsafe evidence filename');
+
+        (new BrowserWorker)->start('http://localhost:8080/', 'local', true);
     }
 }
