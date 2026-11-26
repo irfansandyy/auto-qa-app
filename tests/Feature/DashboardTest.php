@@ -257,8 +257,8 @@ class DashboardTest extends TestCase
 
         $this->assertDatabaseHas('qa_runs', [
             'project_id' => $project->id, 'status' => 'queued',
-            'automatic' => true, 'goal' => 'Check the starting page and a small sample of visible same-site links.',
-            'expected_behavior' => 'The checked pages load and render without server errors.',
+            'automatic' => true, 'advanced' => true, 'guidance' => null,
+            'goal' => QaRun::ADVANCED_GOAL, 'expected_behavior' => QaRun::AUTOMATIC_EXPECTED_BEHAVIOR,
             'base_sha' => str_repeat('a', 40),
         ]);
         $run = QaRun::query()->sole();
@@ -298,19 +298,20 @@ class DashboardTest extends TestCase
         Queue::assertPushed(ExecuteQaRun::class, 1);
     }
 
-    public function test_missing_model_configuration_blocks_queueing_with_actionable_message(): void
+    public function test_the_review_can_queue_without_a_model_and_saves_operator_guidance(): void
     {
         $operator = User::factory()->create();
         Project::factory()->for($operator)->create();
         config(['autoqa.model_url' => '']);
-        Queue::fake();
+        Queue::fake([ExecuteQaRun::class]);
 
         Livewire::actingAs($operator)->test(Dashboard::class)
-            ->call('startRun')->assertHasErrors('run')
-            ->assertSee('Configure the browser worker and model service');
+            ->assertSee('Connect a model in Settings to enable code repair proposals.')
+            ->set('runGuidance', '  Focus on the mobile pricing page.  ')
+            ->call('startRun')->assertHasNoErrors();
 
-        $this->assertDatabaseCount('qa_runs', 0);
-        Queue::assertNothingPushed();
+        $this->assertDatabaseHas('qa_runs', ['status' => 'queued', 'advanced' => true, 'guidance' => 'Focus on the mobile pricing page.']);
+        Queue::assertPushed(ExecuteQaRun::class, 1);
     }
 
     public function test_an_operator_can_queue_with_their_api_when_the_local_model_is_not_configured(): void

@@ -25,6 +25,30 @@ class AuthTest extends TestCase
         $response->assertOk()->assertSee('Create your account')->assertSee(route('login'));
     }
 
+    public function test_deployment_can_close_public_registration_and_provision_an_operator_privately(): void
+    {
+        config(['auth.registration_enabled' => false]);
+
+        $this->get(route('login'))->assertOk()->assertDontSee(route('register'));
+        $this->get(route('register'))->assertNotFound();
+        $this->post(route('register'), [
+            'name' => 'Public User', 'email' => 'public@example.test',
+            'password' => 'public-form-password', 'password_confirmation' => 'public-form-password',
+        ])->assertNotFound();
+        $this->assertDatabaseCount('users', 0);
+
+        $this->artisan('autoqa:create-operator')
+            ->expectsQuestion('Name', 'VM Operator')
+            ->expectsQuestion('Email', ' VM@example.test ')
+            ->expectsQuestion('Password', 'console-created-password')
+            ->expectsQuestion('Confirm password', 'console-created-password')
+            ->assertSuccessful();
+
+        $operator = User::query()->sole();
+        $this->assertSame('vm@example.test', $operator->email);
+        $this->assertTrue(Hash::check('console-created-password', $operator->password));
+    }
+
     public function test_registration_creates_hashed_account_and_signs_in(): void
     {
         $response = $this->post('/register', [

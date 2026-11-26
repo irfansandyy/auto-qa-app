@@ -69,6 +69,7 @@ export class BrowserManager {
       await mkdir(this.evidenceDir, { recursive: true, mode: 0o700 });
       this.browser ??= await this.chromium.launch({
         headless: true,
+        chromiumSandbox: process.env.BROWSER_CHROMIUM_SANDBOX === 'true',
         args: ['--disable-dev-shm-usage', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'],
         ...(process.env.PLAYWRIGHT_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH } : {}),
       });

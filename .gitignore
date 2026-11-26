@@ -16,6 +16,7 @@
 /.vscode
 /.zed
 /auth.json
+/docs
 /node_modules
 /worker/node_modules
 /public/build
@@ -24,6 +25,7 @@
 /public/storage
 /storage/*.key
 /storage/pail
+/secrets/
 /vendor
 /plans
 _ide_helper.php

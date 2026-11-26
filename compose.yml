@@ -1,0 +1,146 @@
+x-php: &php
+  image: autoqa-app:local
+  build:
+    context: .
+    target: application
+  env_file: ${AUTOQA_ENV_FILE:-.env}
+  environment:
+    APP_ENV: production
+    APP_DEBUG: "false"
+    APP_KEY: ${APP_KEY:?Set APP_KEY in the Compose environment}
+    AUTH_REGISTRATION_ENABLED: ${AUTH_REGISTRATION_ENABLED:-false}
+    DB_CONNECTION: sqlite
+    DB_DATABASE: /var/www/html/storage/app/database.sqlite
+    BROWSER_WORKER_URL: http://127.0.0.1:3001
+    BROWSER_WORKER_TOKEN: ${BROWSER_WORKER_TOKEN:?Set BROWSER_WORKER_TOKEN in the Compose environment}
+    AUTOQA_RUNNER_IMAGE: ""
+    SESSION_SECURE_COOKIE: "true"
+  init: true
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  read_only: true
+  tmpfs:
+    - /tmp:mode=1777,size=64m
+  volumes:
+    - app_data:/var/www/html/storage
+    - browser_evidence:/var/www/html/storage/app/private/evidence:ro
+    - ${AUTOQA_SECRETS_DIR:-./secrets}:/run/autoqa-secrets:ro
+
+services:
+  migrate:
+    <<: *php
+    command:
+      - sh
+      - -ec
+      - |
+        umask 007
+        test -f "$$DB_DATABASE" || touch "$$DB_DATABASE"
+        php artisan migrate --force --no-interaction
+        php artisan view:clear --no-interaction
+    mem_limit: 384m
+
+  app:
+    <<: *php
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    mem_limit: 768m
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(@fsockopen('127.0.0.1', 9000) ? 0 : 1);"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  browser:
+    image: autoqa-browser:local
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    network_mode: service:app
+    depends_on:
+      app:
+        condition: service_healthy
+        restart: true
+    restart: unless-stopped
+    init: true
+    read_only: true
+    mem_limit: 2g
+    pids_limit: 256
+    shm_size: 256m
+    cap_drop: [ALL]
+    # Chromium chroots its renderer after entering an unprivileged user namespace.
+    cap_add: [SYS_CHROOT]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=worker/docker-seccomp.json
+    tmpfs:
+      - /tmp:mode=1777,size=512m
+    environment:
+      BROWSER_WORKER_HOST: 127.0.0.1
+      BROWSER_WORKER_PORT: 3001
+      BROWSER_WORKER_TOKEN: ${BROWSER_WORKER_TOKEN:?Set BROWSER_WORKER_TOKEN in the Compose environment}
+      BROWSER_CHROMIUM_SANDBOX: "true"
+      AUTOQA_LOCAL_TARGETS: ${AUTOQA_LOCAL_TARGETS:-}
+    volumes:
+      - browser_evidence:/var/www/html/storage/app/private/evidence
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - --input-type=module
+        - -e
+        - "const reply = await fetch('http://127.0.0.1:3001/health', {headers:{authorization:'Bearer '+process.env.BROWSER_WORKER_TOKEN}}); process.exit(reply.ok && (await reply.json()).ready === true ? 0 : 1);"
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  queue:
+    <<: *php
+    network_mode: service:app
+    depends_on:
+      app:
+        condition: service_healthy
+        restart: true
+      browser:
+        condition: service_healthy
+        restart: true
+    command: ["php", "artisan", "queue:work", "database", "--sleep=2", "--timeout=1800", "--no-interaction"]
+    restart: unless-stopped
+    stop_grace_period: 31m
+    mem_limit: 512m
+
+  nginx:
+    image: autoqa-nginx:local
+    build:
+      context: .
+      target: edge
+    depends_on:
+      app:
+        condition: service_healthy
+        restart: true
+    restart: unless-stopped
+    mem_limit: 128m
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "${AUTOQA_LISTEN_ADDRESS:-0.0.0.0}:${AUTOQA_HTTP_PORT:-80}:80"
+      - "${AUTOQA_LISTEN_ADDRESS:-0.0.0.0}:${AUTOQA_HTTPS_PORT:-443}:443"
+    volumes:
+      - letsencrypt:/etc/letsencrypt:ro
+      - acme_webroot:/var/www/certbot:ro
+
+  certbot:
+    image: certbot/certbot:latest
+    profiles: [tls]
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - acme_webroot:/var/www/certbot
+
+volumes:
+  app_data:
+  browser_evidence:
+  letsencrypt:
+  acme_webroot:

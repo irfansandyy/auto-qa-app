@@ -47,13 +47,15 @@ Keep this process running. In another terminal at the project root:
 php artisan serve --host=127.0.0.1 --port=8000
 ```
 
-Open [the local workspace](http://127.0.0.1:8000). Create your own first operator account; registration closes afterward. A separate terminal runs the only QA queue worker:
+Open [the local workspace](http://127.0.0.1:8000) and create an operator account. Run the QA queue worker in a separate terminal:
 
 ```bash
 php artisan queue:work --timeout=1800 --tries=0 --sleep=1
 ```
 
 `DB_QUEUE_RETRY_AFTER=1860` exceeds the job timeout. A shared lock serializes heavy jobs. Restart the worker after changing configuration. For deployment, use a process supervisor, a normal Laravel web server and HTTPS; the development server is for local use.
+
+For the production Docker Compose stack, Nginx, and certificate setup, follow the [Azure VM deployment guide](docs/AZURE_DEPLOYMENT.md).
 
 ## Connect the model, repository and website
 

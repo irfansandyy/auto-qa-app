@@ -22,11 +22,15 @@ class AuthController extends Controller
 
     public function showRegister(): View
     {
+        abort_unless(config('auth.registration_enabled'), 404);
+
         return view('auth.register');
     }
 
     public function register(Request $request): RedirectResponse
     {
+        abort_unless(config('auth.registration_enabled'), 404);
+
         $request->merge(['email' => Str::lower(trim((string) $request->input('email')))]);
         $validated = $request->validate([
             'name' => ['required', 'string', 'min:2', 'max:100'],
