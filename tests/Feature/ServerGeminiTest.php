@@ -25,7 +25,7 @@ class ServerGeminiTest extends TestCase
 
     private const GEMMA_26B = self::GOOGLE_MODELS.'gemma-4-26b-a4b-it:generateContent';
 
-    private const SENOPATI = 'https://senopati.its.ac.id/llm-gateway/v1/chat/completions';
+    private const SENOPATI = 'https://senopati.lab-alpro.com/llm-gateway/v1/chat/completions';
 
     private const SENOPATI_KEY = 'senopati-fallback-key';
 
@@ -232,6 +232,22 @@ class ServerGeminiTest extends TestCase
         $this->assertSame(self::DECISION, $decision);
         $this->assertSame([[self::GEMMA_31B, self::KEYS[0]]], $this->recordedAttempts());
         Http::assertSent(fn (Request $request): bool => $request['generationConfig']['responseJsonSchema'] === $schema);
+    }
+
+    public function test_managed_connection_checks_models_on_the_senopati_gateway_when_only_its_key_is_configured(): void
+    {
+        config()->set('autoqa.gemini_api_keys', []);
+        config()->set('autoqa.senopati_api_key', self::SENOPATI_KEY);
+        $modelsUrl = 'https://senopati.lab-alpro.com/llm-gateway/v1/models';
+        Http::fake([$modelsUrl => Http::response(['data' => [['id' => 'qwen3:14b']]])]);
+
+        $health = $this->serverGemini()->health();
+
+        $this->assertTrue($health['ready']);
+        Http::assertSentCount(1);
+        Http::assertSent(fn (Request $request): bool => $request->url() === $modelsUrl
+            && $request->method() === 'GET'
+            && $request->hasHeader('Authorization', 'Bearer '.self::SENOPATI_KEY));
     }
 
     public function test_a_missing_model_skips_only_the_pair_but_a_denied_key_is_skipped_on_lower_models(): void

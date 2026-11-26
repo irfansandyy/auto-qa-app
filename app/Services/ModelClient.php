@@ -14,7 +14,7 @@ class ModelClient
 
     public const SERVER_PROVIDERS = ['local', 'server_gemini'];
 
-    private const SENOPATI_BASE_URL = 'https://senopati.its.ac.id/llm-gateway/v1';
+    private const SENOPATI_BASE_URL = 'https://senopati.lab-alpro.com/llm-gateway/v1';
 
     private string $provider = 'local';
 
@@ -150,8 +150,8 @@ class ModelClient
                     'model' => $this->name, 'max_tokens' => 6144, 'system' => $system,
                     'messages' => [['role' => 'user', 'content' => $input]],
                 ]),
-                'gemini' => $request->post($this->url().'/models/'.rawurlencode(preg_replace('/\Amodels\//', '', $this->name)).':generateContent',
-                    $this->geminiPayload($system, $input, $schema)),
+                'gemini' => $this->geminiPool()->generateModel($request, preg_replace('/\Amodels\//', '', $this->name),
+                    $this->geminiPayload($system, $input, $schema), hrtime(true) + $timeout * 1_000_000_000),
                 default => $request->post($this->url().'/chat/completions', $this->chatPayload($system, $input)),
             };
         } catch (\Throwable) {

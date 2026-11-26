@@ -57,7 +57,8 @@ class GeminiModelPool
                     continue;
                 }
                 try {
-                    $response = $this->generateWithShortRetry($key, $model, $payload, $deadline);
+                    $request = $this->request($key, $this->remainingTimeout($deadline));
+                    $response = $this->generateModel($request, $model, $payload, $deadline, retryOverload: true);
                 } catch (ConnectionException) {
                     return null;
                 }
@@ -96,11 +97,23 @@ class GeminiModelPool
     }
 
     /** @param array<string, mixed> $payload */
-    private function generateWithShortRetry(#[\SensitiveParameter] string $key, string $model, array $payload, int $deadline): Response
+    public function generateModel(#[\SensitiveParameter] PendingRequest $request, string $model, array $payload, int $deadline, bool $retryOverload = false): Response
     {
-        $url = self::BASE_URL.'/models/'.$model.':generateContent';
-        $response = $this->request($key, $this->remainingTimeout($deadline))->post($url, $payload);
-        if ($response->status() !== 503) {
+        $url = self::BASE_URL.'/models/'.rawurlencode($model).':generateContent';
+        $payload = $this->withModelThinking($model, $payload);
+        $send = function () use ($request, $url, $deadline, &$payload): Response {
+            $response = $request->timeout($this->remainingTimeout($deadline))->post($url, $payload);
+            if (($payload['generationConfig']['thinkingConfig']['thinkingLevel'] ?? null) === 'xhigh' && $this->rejectsThinkingLevel($response)) {
+                $payload['generationConfig']['thinkingConfig']['thinkingLevel'] = 'high';
+
+                return $request->timeout($this->remainingTimeout($deadline))->post($url, $payload);
+            }
+
+            return $response;
+        };
+
+        $response = $send();
+        if (! $retryOverload || $response->status() !== 503) {
             return $response;
         }
 
@@ -110,7 +123,38 @@ class GeminiModelPool
         }
         Sleep::for($delay)->seconds();
 
-        return $this->request($key, $this->remainingTimeout($deadline))->post($url, $payload);
+        return $send();
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function withModelThinking(string $model, array $payload): array
+    {
+        [$thinking, $outputTokens] = match (true) {
+            preg_match('/\Agemini-4-(?:hydrogen|neon)(?:[.-]|\z)/', $model) === 1 => [['thinkingLevel' => 'xhigh'], 65_536],
+            preg_match('/\Agemini-(?:3[.-]|4-(?:argon|carbon)(?:[.-]|\z))/', $model) === 1 => [['thinkingLevel' => 'high'], 65_536],
+            str_starts_with($model, 'gemma-4-') => [['thinkingLevel' => 'high'], 32_768],
+            preg_match('/\Agemini-2\.5-flash(?:[.-]|\z)/', $model) === 1 => [['thinkingBudget' => 24_576], 32_768],
+            preg_match('/\Agemini-2\.5-pro(?:[.-]|\z)/', $model) === 1 => [['thinkingBudget' => 32_768], 40_960],
+            default => [null, null],
+        };
+        if ($thinking !== null) {
+            $payload['generationConfig']['thinkingConfig'] = $thinking;
+            $payload['generationConfig']['maxOutputTokens'] = $outputTokens;
+        }
+
+        return $payload;
+    }
+
+    private function rejectsThinkingLevel(Response $response): bool
+    {
+        if ($response->status() !== 400) {
+            return false;
+        }
+        $message = $response->json('error.message');
+
+        return is_string($message)
+            && preg_match('/thinking[\s_.-]*level/i', $message) === 1
+            && preg_match('/unsupported|not supported|invalid/i', $message) === 1;
     }
 
     private function remainingTimeout(int $deadline): int
