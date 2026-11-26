@@ -53,8 +53,8 @@ class AuthTest extends TestCase
     {
         $response = $this->post('/register', [
             'name' => 'First User', 'email' => ' OPERATOR@example.test ',
-            'password' => 'correct-horse-battery',
-            'password_confirmation' => 'correct-horse-battery',
+            'password' => 'sunrise8',
+            'password_confirmation' => 'sunrise8',
         ]);
 
         $response->assertRedirect(route('dashboard'));
@@ -62,7 +62,7 @@ class AuthTest extends TestCase
         $this->assertDatabaseHas('users', ['email' => 'operator@example.test']);
         $user = User::query()->sole();
         $this->assertAuthenticatedAs($user);
-        $this->assertTrue(Hash::check('correct-horse-battery', $user->password));
+        $this->assertTrue(Hash::check('sunrise8', $user->password));
     }
 
     public function test_registration_creates_separate_account_when_other_users_exist(): void
@@ -104,7 +104,7 @@ class AuthTest extends TestCase
     {
         $response = $this->from('/register')->post('/register', [
             'name' => 'Operator', 'email' => 'operator@example.test',
-            'password' => 'short', 'password_confirmation' => 'short',
+            'password' => 'short77', 'password_confirmation' => 'short77',
         ]);
 
         $response->assertRedirect('/register')->assertSessionHasErrors(['password']);
@@ -122,6 +122,20 @@ class AuthTest extends TestCase
         $response->assertRedirect('/register')->assertSessionHasErrors('password');
         $this->assertDatabaseCount('users', 0);
         $this->assertGuest();
+    }
+
+    public function test_registration_rejects_passwords_bcrypt_cannot_hash_safely(): void
+    {
+        config(['hashing.driver' => 'bcrypt']);
+
+        foreach (["embedded\0null", str_repeat('界', 25)] as $password) {
+            $this->from(route('register'))->post(route('register'), [
+                'name' => 'Operator', 'email' => 'operator@example.test',
+                'password' => $password, 'password_confirmation' => $password,
+            ])->assertRedirect(route('register'))->assertSessionHasErrors('password');
+        }
+
+        $this->assertDatabaseCount('users', 0);
     }
 
     public function test_registration_rejects_existing_email_after_normalizing_case_and_spaces(): void

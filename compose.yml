@@ -8,7 +8,7 @@ x-php: &php
     APP_ENV: production
     APP_DEBUG: "false"
     APP_KEY: ${APP_KEY:?Set APP_KEY in the Compose environment}
-    AUTH_REGISTRATION_ENABLED: ${AUTH_REGISTRATION_ENABLED:-false}
+    AUTH_REGISTRATION_ENABLED: ${AUTH_REGISTRATION_ENABLED:-true}
     DB_CONNECTION: sqlite
     DB_DATABASE: /var/www/html/storage/app/database.sqlite
     BROWSER_WORKER_URL: http://127.0.0.1:3001
@@ -111,6 +111,18 @@ services:
     restart: unless-stopped
     stop_grace_period: 31m
     mem_limit: 512m
+
+  mail:
+    <<: *php
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["php", "artisan", "queue:work", "database", "--queue=mail", "--sleep=1", "--tries=1", "--timeout=30", "--no-interaction"]
+    restart: unless-stopped
+    stop_grace_period: 35s
+    mem_limit: 256m
+    volumes:
+      - app_data:/var/www/html/storage
 
   nginx:
     image: autoqa-nginx:local

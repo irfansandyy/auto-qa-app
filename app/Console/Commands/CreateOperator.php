@@ -30,7 +30,7 @@ class CreateOperator extends Command
         ], [
             'name' => ['required', 'string', 'min:2', 'max:100'],
             'email' => ['required', 'email', 'max:255', 'unique:users,email'],
-            'password' => ['required', 'confirmed', Password::min(12)],
+            'password' => ['required', 'confirmed', Password::defaults()],
         ]);
 
         if ($validator->fails()) {
