@@ -115,6 +115,9 @@ class RepositoryWorkspace extends Component
     public ?string $repositoryError = null;
 
     #[Locked]
+    public bool $repositoryAccessDenied = false;
+
+    #[Locked]
     public ?string $repositoryNotice = null;
 
     #[Locked]
@@ -681,6 +684,7 @@ class RepositoryWorkspace extends Component
     {
         $this->repositoryError = null;
         $this->repositoryNotice = null;
+        $this->repositoryAccessDenied = false;
 
         try {
             $operation($this->repositoryUrl($write));
@@ -699,7 +703,12 @@ class RepositoryWorkspace extends Component
         $project = $this->project();
         abort_unless($project?->repository_url && auth()->user(), 404);
         abort_unless($project->repository_url === $this->mountedRepositoryUrl, 409, __('repository-actions.project_changed'));
-        $this->access->assertAllowed(auth()->user(), $project->repository_url);
+        try {
+            $this->access->assertAllowed(auth()->user(), $project->repository_url);
+        } catch (AuthorizationException $exception) {
+            $this->repositoryAccessDenied = true;
+            throw $exception;
+        }
         if ($write) {
             $this->access->assertCanWrite(auth()->user(), $project->repository_url);
         }

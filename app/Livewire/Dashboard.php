@@ -6,6 +6,7 @@ use App\Jobs\ExecuteQaRun;
 use App\Models\Project;
 use App\Models\QaRun;
 use App\Services\BrowserWorker;
+use App\Services\GitHub\GitHubAccount;
 use App\Services\GitHub\GitHubAppClient;
 use App\Services\GitHub\RepositoryUrl;
 use App\Services\ModelClient;
@@ -509,9 +510,7 @@ class Dashboard extends Component
             ? $project->runs()->with(['steps', 'findings'])->findOrFail($this->selectedRunId)
             : null;
 
-        $githubReady = (bool) config('github.app_id')
-            && (bool) config('github.private_key_path')
-            && is_file(config('github.private_key_path'));
+        $githubCallbackUrl = $this->panel === 'settings' ? GitHubAccount::callbackUrl() : null;
         $runConfigurationIssue = $project ? $this->runConfigurationIssue($project, QaSectors::selected($this->runSectors)) : null;
 
         $catalogs = [];
@@ -539,7 +538,9 @@ class Dashboard extends Component
             'run' => $run,
             'runPullNumber' => $this->runPullNumber($run, $project),
             'repositorySections' => RepositoryWorkspace::SECTIONS,
-            'githubReady' => $githubReady,
+            'githubReady' => $this->panel === 'settings' && GitHubAppClient::hasSigningKey(),
+            'githubOAuthReady' => $githubCallbackUrl !== null && GitHubAccount::hasOAuthCredentials(),
+            'githubCallbackUrl' => $githubCallbackUrl,
             'modelReady' => app(ModelClient::class)->forUser(auth()->user())->ready(),
             'browserReady' => app(BrowserWorker::class)->ready(),
             'canStartRun' => $runConfigurationIssue === null,

@@ -1,7 +1,10 @@
+import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -146,6 +149,61 @@ fi
         self.assertEqual(result.stdout, f"AUTOQA_DEPLOY_SKIPPED {self.sha}\n")
         self.assertFalse(self.calls.exists())
         self.assertEqual(self.env_path.read_bytes(), self.original)
+
+
+class WorkflowResultTest(unittest.TestCase):
+    revision = "1" * 40
+
+    def check_result(self, entries):
+        workflow = Path(__file__).resolve().parents[1] / ".github/workflows/auto-qa.yml"
+        script = workflow.read_text().split("<<'PY'\n", 1)[1].split("\n          PY", 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            response = Path(directory) / "response.json"
+            response.write_text(json.dumps({"value": entries}), encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, "-c", textwrap.dedent(script), str(response), self.revision],
+                text=True, capture_output=True, timeout=5,
+            )
+
+    def linux_status(self, stdout, stderr="", code="ProvisioningState/succeeded"):
+        return {"code": code, "message": f"Enable completed:\n[stdout]\n{stdout}\n[stderr]\n{stderr}\n"}
+
+    def test_recognizes_the_deployment_marker_in_both_azure_response_formats(self):
+        marker = f"AUTOQA_DEPLOY_OK {self.revision}"
+        statuses = [self.linux_status(marker), {"code": "ComponentStatus/StdOut/succeeded", "message": marker}]
+        for status in statuses:
+            with self.subTest(code=status["code"]):
+                result = self.check_result([status])
+
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(f"Azure VM is serving the tested revision {self.revision}.", result.stdout)
+
+    def test_recognizes_a_skip_and_reports_a_failed_stage_without_exposing_stderr(self):
+        skipped = self.check_result([self.linux_status(f"AUTOQA_DEPLOY_SKIPPED {self.revision}")])
+        failed = self.check_result([self.linux_status(
+            f"AUTOQA_DEPLOY_FAILED {self.revision} compose", "private VM error", "ProvisioningState/failed",
+        )])
+
+        self.assertEqual(skipped.returncode, 0)
+        self.assertIn("because main moved", skipped.stdout)
+        self.assertEqual(failed.returncode, 1)
+        self.assertIn("during compose", failed.stdout)
+        self.assertNotIn("private VM error", failed.stdout + failed.stderr)
+
+    def test_requires_an_exact_marker_in_stdout_from_a_successful_status(self):
+        marker = f"AUTOQA_DEPLOY_OK {self.revision}"
+        statuses = {
+            "wrong revision": self.linux_status(f"AUTOQA_DEPLOY_OK {'2' * 40}"),
+            "stderr": self.linux_status("", marker),
+            "failed extension": self.linux_status(marker, code="ProvisioningState/failed"),
+            "conflicting markers": self.linux_status(f"{marker}\nAUTOQA_DEPLOY_SKIPPED {self.revision}"),
+        }
+        for name, status in statuses.items():
+            with self.subTest(name=name):
+                result = self.check_result([status])
+
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertNotIn("Azure VM is serving", result.stdout)
 
 
 if __name__ == "__main__":

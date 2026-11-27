@@ -13,8 +13,12 @@ class GitHubConnectionController extends Controller
 {
     public function connect(Request $request, GitHubAccount $github): RedirectResponse
     {
-        if (! config('github.client_id') || ! config('github.client_secret')) {
+        if (! GitHubAccount::hasOAuthCredentials()) {
             return $this->settings()->withErrors(['github' => __('repository-access.connection_unconfigured')]);
+        }
+        $callback = GitHubAccount::callbackUrl();
+        if ($callback === null) {
+            return $this->settings()->withErrors(['github' => __('repository-access.callback_unconfigured')]);
         }
 
         $state = Str::random(64);
@@ -23,7 +27,7 @@ class GitHubConnectionController extends Controller
             'user_id' => $request->user()->getKey(), 'expires_at' => now()->addMinutes(10)->getTimestamp(),
         ]);
 
-        return redirect()->away($github->authorizeUrl($state, $verifier, $this->callbackUrl()));
+        return redirect()->away($github->authorizeUrl($state, $verifier, $callback));
     }
 
     public function callback(Request $request, GitHubAccount $github): RedirectResponse
@@ -31,15 +35,16 @@ class GitHubConnectionController extends Controller
         $link = $request->session()->pull('github_link');
         $state = $request->query('state');
         $code = $request->query('code');
+        $callback = GitHubAccount::callbackUrl();
         if (! is_array($link) || $link['user_id'] !== $request->user()->getKey() || $link['expires_at'] < now()->getTimestamp()
             || ! is_string($state) || ! hash_equals($link['state'], $state)
             || ! is_string($code) || $code === '' || strlen($code) > 255
-            || ! config('github.client_id') || ! config('github.client_secret')) {
+            || ! GitHubAccount::hasOAuthCredentials() || $callback === null) {
             return $this->settings()->withErrors(['github' => __('repository-access.connection_failed')]);
         }
 
         try {
-            $github->connect($request->user(), $code, $link['verifier'], $this->callbackUrl());
+            $github->connect($request->user(), $code, $link['verifier'], $callback);
         } catch (ConnectionException|RuntimeException) {
             return $this->settings()->withErrors(['github' => __('repository-access.connection_failed')]);
         }
@@ -58,10 +63,5 @@ class GitHubConnectionController extends Controller
     private function settings(): RedirectResponse
     {
         return redirect()->route('dashboard', ['panel' => 'settings'])->header('Referrer-Policy', 'no-referrer');
-    }
-
-    private function callbackUrl(): string
-    {
-        return rtrim((string) config('app.url'), '/').route('settings.github.callback', absolute: false);
     }
 }

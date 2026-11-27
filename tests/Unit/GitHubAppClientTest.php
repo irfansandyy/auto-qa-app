@@ -47,6 +47,16 @@ class GitHubAppClientTest extends TestCase
         parent::tearDown();
     }
 
+    public function test_signing_readiness_checks_the_rsa_key_contents_without_contacting_github(): void
+    {
+        $this->assertTrue(GitHubAppClient::hasSigningKey());
+
+        file_put_contents($this->keyPath, 'Invalid key contents');
+
+        $this->assertFalse(GitHubAppClient::hasSigningKey());
+        Http::assertNothingSent();
+    }
+
     public function test_inspects_the_selected_repository_with_a_scoped_token_and_signed_jwt(): void
     {
         $this->fakeApi();

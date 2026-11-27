@@ -31,6 +31,7 @@ class GitHubAccountLinkTest extends TestCase
 
     public function test_owner_can_link_and_disconnect_with_an_encrypted_user_token(): void
     {
+        config(['app.url' => 'https://qa-app.example.test/']);
         Http::fake([
             self::TOKEN_ENDPOINT => Http::response(['access_token' => 'test-user-token', 'refresh_token' => 'test-refresh-token', 'expires_in' => 28800]),
             'https://api.github.com/user' => Http::response(['id' => 456, 'login' => 'linked-user']),
@@ -40,6 +41,7 @@ class GitHubAccountLinkTest extends TestCase
         $response->assertRedirectContains('https://github.com/login/oauth/authorize?');
         parse_str((string) parse_url($response->headers->get('Location'), PHP_URL_QUERY), $authorization);
         $this->assertSame('S256', $authorization['code_challenge_method']);
+        $this->assertSame('https://qa-app.example.test/settings/github/callback', $authorization['redirect_uri']);
         $callback = route('settings.github.callback', ['state' => $authorization['state'], 'code' => 'example-code']);
         $this->get($callback)->assertRedirect(route('dashboard', ['panel' => 'settings']))->assertSessionHas('githubStatus');
 
@@ -58,6 +60,19 @@ class GitHubAccountLinkTest extends TestCase
 
         $this->delete(route('settings.github.disconnect'))->assertSessionHas('githubStatus');
         $this->assertNull($user->fresh()->github_credentials);
+    }
+
+    public function test_a_missing_public_base_url_keeps_the_user_in_settings_with_an_actionable_error(): void
+    {
+        config(['app.url' => '/invalid-base-url']);
+        Http::fake();
+
+        $this->actingAs(User::factory()->create())->post(route('settings.github.connect', absolute: false))
+            ->assertRedirect(route('dashboard', ['panel' => 'settings']))
+            ->assertSessionHasErrors(['github' => __('repository-access.callback_unconfigured')])
+            ->assertSessionMissing('github_link');
+
+        Http::assertNothingSent();
     }
 
     public function test_callback_does_not_link_another_auto_qa_user_or_accept_an_installation_id_as_proof(): void

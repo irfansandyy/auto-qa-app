@@ -122,24 +122,49 @@ jobs:
           try:
               with open(sys.argv[1], encoding="utf-8") as result:
                   entries = json.load(result)["value"]
-              lines = {
-                  line.strip()
-                  for entry in entries
-                  if entry["code"] == "ComponentStatus/StdOut/succeeded"
-                  for line in entry["message"].splitlines()
-              }
-          except (OSError, ValueError, TypeError, KeyError, AttributeError):
-              lines = set()
+              if not isinstance(entries, list):
+                  raise ValueError("Expected Azure status entries")
+          except (OSError, ValueError, TypeError, KeyError):
+              print("::error::Azure Run Command returned an unreadable result.")
+              sys.exit(1)
+
+          lines = set()
+          azure_failed = False
+          for entry in entries:
+              if not isinstance(entry, dict):
+                  continue
+              code = entry.get("code")
+              message = entry.get("message")
+              if code in ("ProvisioningState/failed", "ComponentStatus/StdOut/failed"):
+                  azure_failed = True
+              if not isinstance(message, str):
+                  continue
+              if code in ("ProvisioningState/succeeded", "ProvisioningState/failed"):
+                  streams = f"\n{message}\n".replace("\r\n", "\n")
+                  _, stdout_header, streams = streams.partition("\n[stdout]\n")
+                  message, stderr_header, _ = streams.partition("\n[stderr]\n")
+                  if not (stdout_header and stderr_header):
+                      continue
+              elif code not in ("ComponentStatus/StdOut/succeeded", "ComponentStatus/StdOut/failed"):
+                  continue
+              lines.update(line.strip() for line in message.splitlines())
 
           sha = sys.argv[2]
-          if f"AUTOQA_DEPLOY_OK {sha}" in lines:
+          stages = ("setup", "checkout", "lock", "fetch", "private-env", "fast-forward", "compose", "record")
+          stage = next((item for item in stages if f"AUTOQA_DEPLOY_FAILED {sha} {item}" in lines), None)
+          succeeded = f"AUTOQA_DEPLOY_OK {sha}" in lines
+          skipped = f"AUTOQA_DEPLOY_SKIPPED {sha}" in lines
+          if stage:
+              print(f"::error::The VM reported a deployment failure during {stage}. Check the VM deployment log.")
+          elif azure_failed:
+              print("::error::Azure Run Command reported failure. Check the VM Run Command handler log.")
+          elif succeeded and not skipped:
               print(f"Azure VM is serving the tested revision {sha}.")
-          elif f"AUTOQA_DEPLOY_SKIPPED {sha}" in lines:
+              sys.exit(0)
+          elif skipped and not succeeded:
               print(f"Skipped revision {sha} because main moved.")
+              sys.exit(0)
           else:
-              stages = ("setup", "checkout", "lock", "fetch", "private-env", "fast-forward", "compose", "record")
-              stage = next((item for item in stages if f"AUTOQA_DEPLOY_FAILED {sha} {item}" in lines), None)
-              hint = f" during {stage}" if stage else ""
-              print(f"::error::The VM did not confirm deployment{hint}. Check the VM runner setup and deployment log.")
-              sys.exit(1)
+              print("::error::The VM did not confirm deployment. Check the VM runner setup and deployment log.")
+          sys.exit(1)
           PY

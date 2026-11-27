@@ -17,6 +17,23 @@ class GitHubAccount
 
     public function __construct(private GitHubAppClient $app) {}
 
+    public static function hasOAuthCredentials(): bool
+    {
+        return filled(config('github.client_id')) && filled(config('github.client_secret'));
+    }
+
+    public static function callbackUrl(): ?string
+    {
+        $base = trim((string) config('app.url'));
+        $parts = parse_url($base);
+        if (! filter_var($base, FILTER_VALIDATE_URL) || ! in_array($parts['scheme'] ?? null, ['http', 'https'], true)
+            || isset($parts['user']) || isset($parts['query']) || isset($parts['fragment'])) {
+            return null;
+        }
+
+        return rtrim($base, '/').route('settings.github.callback', absolute: false);
+    }
+
     public function authorizeUrl(string $state, string $verifier, string $callback): string
     {
         return self::OAUTH.'/authorize?'.http_build_query([
@@ -47,7 +64,7 @@ class GitHubAccount
     public function repositoryPermissions(User $user, string $url): array
     {
         $denied = ['read' => false, 'write' => false];
-        if (! $user->exists || $user->github_id === null || ! config('github.client_id') || ! config('github.client_secret')) {
+        if (! $user->exists || $user->github_id === null || ! self::hasOAuthCredentials()) {
             return $denied;
         }
 

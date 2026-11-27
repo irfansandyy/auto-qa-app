@@ -9,7 +9,7 @@
 
         @if ($project?->repository_url)
             <div class="repo-workspace-actions">
-                @if (in_array($section, ['files', 'git'], true) && $repositoryBranch)
+                @if (in_array($section, ['files', 'git'], true) && $repositoryBranch && ! $repositoryAccessDenied)
                     <div class="repo-picker">
                         <label for="repository-branch"><x-icon name="commit" /> {{ __('repository-workspace.branch') }}</label>
                         <select id="repository-branch" wire:change="selectRepositoryBranch($event.target.value)" wire:loading.attr="disabled" @disabled($editingRepositoryFile)>
@@ -33,7 +33,15 @@
     <p class="sr-only" role="status" wire:loading>{{ __('repository-workspace.loading') }}</p>
 
     @if ($repositoryError)
-        <div class="notice notice-error" role="alert">{{ $repositoryError }}</div>
+        <div class="notice notice-error">
+            <p role="alert">{{ $repositoryError }}</p>
+            @if ($repositoryAccessDenied)
+                <div class="repo-inline-actions">
+                    <a class="inline-link" href="{{ route('dashboard', ['project' => $project?->id, 'panel' => 'settings']) }}#github-connection">{{ __('dashboard-panels.github.account_settings') }}</a>
+                    <a class="inline-link" href="{{ route('docs.github-app') }}#approve">{{ __('dashboard-panels.project.get_repository_access') }}</a>
+                </div>
+            @endif
+        </div>
     @endif
     @if ($repositoryNotice)
         <div class="notice notice-success" role="status">{{ $repositoryNotice }}</div>
@@ -47,14 +55,16 @@
                 <a class="text-link" href="{{ route('docs.github-app') }}">{{ __('repository-workspace.connection_guide') }}</a>
             @endif
         </div>
-    @elseif ($section === 'files')
-        @include('partials.repository-files')
-    @elseif ($section === 'changes')
-        @include('partials.repository-changes')
-    @elseif ($section === 'git')
-        @include('partials.repository-history')
-    @elseif ($section === 'pull-requests')
-        @include('partials.repository-pull-requests')
+    @elseif (! $repositoryAccessDenied)
+        @if ($section === 'files' && (! $repositoryError || $repositoryTree !== [] || $repositoryFile !== null))
+            @include('partials.repository-files')
+        @elseif ($section === 'changes')
+            @include('partials.repository-changes')
+        @elseif ($section === 'git')
+            @include('partials.repository-history')
+        @elseif ($section === 'pull-requests')
+            @include('partials.repository-pull-requests')
+        @endif
     @endif
 
     @if ($project?->repository_url)

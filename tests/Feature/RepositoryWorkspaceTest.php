@@ -90,7 +90,37 @@ class RepositoryWorkspaceTest extends TestCase
             ->assertDontSee(__('repository-workspace.edit_file'))
             ->call('editRepositoryFile')
             ->assertSet('repositoryError', __('repository-access.write_denied'))
+            ->assertSet('repositoryAccessDenied', false)
             ->assertSet('editingRepositoryFile', false);
+    }
+
+    public function test_file_explorer_offers_connection_help_and_opens_with_a_verified_github_grant(): void
+    {
+        config(['repository-access.grants' => [], 'repository-access.write_grants' => [],
+            'github.client_id' => 'example-client', 'github.client_secret' => 'example-secret']);
+        $project = Project::factory()->create(['repository_url' => self::REPOSITORY]);
+        $settingsUrl = route('dashboard', ['project' => $project->id, 'panel' => 'settings']).'#github-connection';
+        $github = $this->mockFileWorkspace();
+        $github->shouldReceive('installationIdForRepository')->with(self::REPOSITORY)->andReturn(42);
+        Http::fake(['https://api.github.com/user/installations/42/repositories*' => Http::response([
+            'repositories' => [['full_name' => 'example/workspace', 'permissions' => ['pull' => true, 'push' => false]]],
+        ])]);
+
+        $workspace = Livewire::actingAs($project->user)->test(RepositoryWorkspace::class, ['section' => 'files', 'projectId' => $project->id])
+            ->assertSet('repositoryAccessDenied', true)
+            ->assertSet('repositoryBranch', null)
+            ->assertSee(__('repository-access.denied'))
+            ->assertSeeHtml('href="'.e($settingsUrl).'"');
+        Http::assertNothingSent();
+
+        $project->user->forceFill(['github_id' => 456, 'github_login' => 'linked-user',
+            'github_credentials' => ['token' => 'test-user-token', 'refresh' => null, 'expires_at' => null],
+        ])->save();
+        $workspace->call('loadRepository')
+            ->assertSet('repositoryAccessDenied', false)
+            ->assertSet('repositoryError', null)
+            ->assertSet('repositoryBranch', 'main')
+            ->assertSet('repositoryTree.0.name', 'app');
     }
 
     public function test_revoking_a_repository_grant_blocks_an_existing_workspace_session(): void

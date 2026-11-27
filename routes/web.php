@@ -5,6 +5,7 @@ use App\Http\Controllers\GitHubConnectionController;
 use App\Http\Controllers\ModelSettingsController;
 use App\Http\Controllers\PreferencesController;
 use App\Livewire\Dashboard;
+use App\Services\GitHub\GitHubAccount;
 use App\Services\GitHub\GitHubAppClient;
 use Illuminate\Support\Facades\Route;
 use Illuminate\View\View;
@@ -12,6 +13,7 @@ use Illuminate\View\View;
 Route::get('/', fn () => redirect()->route(auth()->check() ? 'dashboard' : 'login'));
 Route::get('/docs/github-app', fn (): View => view('docs.github-app', [
     'installationUrl' => GitHubAppClient::installationUrl(),
+    'githubCallbackUrl' => GitHubAccount::callbackUrl(),
 ]))->name('docs.github-app');
 
 Route::middleware('auth')->group(function () {

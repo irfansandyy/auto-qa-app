@@ -55,11 +55,13 @@ class GitHubGuideTest extends TestCase
 
     public function test_the_settings_link_opens_the_guide_with_the_users_preferences(): void
     {
+        config(['app.url' => 'https://qa-app.example.test']);
         $user = User::factory()->create(['locale' => 'id', 'theme' => 'dark']);
 
         $this->actingAs($user)->get(route('dashboard', ['panel' => 'settings']))
             ->assertOk()
             ->assertSee('href="'.route('docs.github-app').'"', false)
+            ->assertSee('https://qa-app.example.test/settings/github/callback')
             ->assertSee('Bantuan')
             ->assertSee('Panduan GitHub App');
 
@@ -67,6 +69,7 @@ class GitHubGuideTest extends TestCase
             ->assertOk()
             ->assertSee('lang="id"', false)
             ->assertSee('data-theme="dark"', false)
+            ->assertSee('https://qa-app.example.test/settings/github/callback')
             ->assertSee('Hubungkan repositori GitHub')
             ->assertSee('Buka ruang kerja');
     }

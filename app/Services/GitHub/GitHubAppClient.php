@@ -6,6 +6,7 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use InvalidArgumentException;
+use OpenSSLAsymmetricKey;
 use RuntimeException;
 use Throwable;
 
@@ -39,6 +40,17 @@ class GitHubAppClient
         return is_string($slug) && trim($slug) !== ''
             ? 'https://github.com/apps/'.rawurlencode(trim($slug)).'/installations/new'
             : null;
+    }
+
+    public static function hasSigningKey(): bool
+    {
+        try {
+            self::signingConfiguration();
+
+            return true;
+        } catch (RuntimeException) {
+            return false;
+        }
     }
 
     /** @return array{owner: string, name: string, full_name: string, default_branch: string, head_sha: string, installation_id: int, can_push: bool} */
@@ -1353,20 +1365,7 @@ class GitHubAppClient
 
     private function jwt(): string
     {
-        $id = (string) config('github.app_id', '');
-        $path = (string) config('github.private_key_path', '');
-        if (! preg_match('/^[1-9][0-9]*$/D', $id) || $path === '') {
-            throw new RuntimeException('Configure GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH, then install the GitHub App on your repository. See docs/GITHUB_SETUP.md.');
-        }
-        if (! is_file($path) || ! is_readable($path)) {
-            throw new RuntimeException('GITHUB_APP_PRIVATE_KEY_PATH must point to a readable server-side GitHub App PEM key.');
-        }
-        $pem = file_get_contents($path);
-        $key = $pem === false ? false : @openssl_pkey_get_private($pem);
-        if ($key === false || (openssl_pkey_get_details($key)['type'] ?? null) !== OPENSSL_KEYTYPE_RSA) {
-            throw new RuntimeException('The GitHub App private key must be a valid RSA PEM key.');
-        }
-
+        [$id, $key] = self::signingConfiguration();
         $encode = static fn (string $value): string => rtrim(strtr(base64_encode($value), '+/', '-_'), '=');
         $unsigned = $encode(json_encode(['alg' => 'RS256', 'typ' => 'JWT'], JSON_THROW_ON_ERROR)).'.'
             .$encode(json_encode(['iat' => time() - 60, 'exp' => time() + 540, 'iss' => $id], JSON_THROW_ON_ERROR));
@@ -1375,6 +1374,26 @@ class GitHubAppClient
         }
 
         return $unsigned.'.'.$encode($signature);
+    }
+
+    /** @return array{string, OpenSSLAsymmetricKey} */
+    private static function signingConfiguration(): array
+    {
+        $id = (string) config('github.app_id', '');
+        $path = (string) config('github.private_key_path', '');
+        if (! preg_match('/^[1-9][0-9]*$/D', $id) || $path === '') {
+            throw new RuntimeException('Configure GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH, then install the GitHub App on your repository.');
+        }
+        if (! is_file($path) || ! is_readable($path)) {
+            throw new RuntimeException('GITHUB_APP_PRIVATE_KEY_PATH must point to a readable server-side GitHub App PEM key.');
+        }
+        $pem = @file_get_contents($path);
+        $key = $pem === false ? false : @openssl_pkey_get_private($pem);
+        if ($key === false || (openssl_pkey_get_details($key)['type'] ?? null) !== OPENSSL_KEYTYPE_RSA) {
+            throw new RuntimeException('The GitHub App private key must be a valid RSA PEM key.');
+        }
+
+        return [$id, $key];
     }
 
     private function request(string $method, string $path, string $token, array $data = [], array $statuses = [200, 201], ?int $maximumBytes = null): Response

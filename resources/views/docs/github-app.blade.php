@@ -143,7 +143,11 @@
                         <p class="docs-callout">{{ __('github-docs.permissions_review_identity') }}</p>
                         <p>{{ __('github-docs.permissions_check_details') }}</p>
                         <h3 class="docs-reference">{{ __('github-docs.oauth_heading') }}</h3>
-                        <p>{{ __('github-docs.oauth_callback') }} <code>{{ rtrim((string) config('app.url'), '/').route('settings.github.callback', absolute: false) }}</code></p>
+                        @if ($githubCallbackUrl)
+                            <p>{{ __('github-docs.oauth_callback') }} <code>{{ $githubCallbackUrl }}</code></p>
+                        @else
+                            <p>{{ __('repository-access.callback_unconfigured') }}</p>
+                        @endif
                         <p>{{ __('github-docs.oauth_manual_connect') }}</p>
                         <p>{{ __('github-docs.oauth_credentials') }} <code>GITHUB_APP_CLIENT_ID</code> {{ __('github-docs.oauth_and') }} <code>GITHUB_APP_CLIENT_SECRET</code>.</p>
                         <p>{{ __('github-docs.oauth_deploy') }}</p>
