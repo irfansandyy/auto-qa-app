@@ -1,0 +1,145 @@
+name: Auto QA CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  smoke:
+    name: Quick tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check that production dotenv files are private
+        shell: bash
+        run: |
+          if [[ -n "$(git ls-files -- .env .env.production .env.backup)" ]]; then
+            echo '::error::Remove private dotenv files from the repository. Use the tracked examples for defaults.'
+            exit 1
+          fi
+
+      - name: Prepare PHP
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.5'
+          extensions: curl, dom, mbstring, pdo_sqlite
+          coverage: none
+          tools: composer:v2
+
+      - name: Install test dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Run smoke tests within 55 seconds
+        timeout-minutes: 1
+        shell: bash
+        run: |
+          export APP_KEY="base64:$(php -r 'echo base64_encode(random_bytes(32));')"
+          timeout --kill-after=3s 52s bash -euo pipefail -c '
+            vendor/bin/phpunit \
+              tests/Feature/AuthTest.php \
+              tests/Feature/PasswordResetTest.php \
+              tests/Feature/DashboardTest.php \
+              tests/Feature/QaSectorsTest.php \
+              tests/Feature/RepositoryWorkspaceTest.php \
+              tests/Unit/GitHubAppClientTest.php
+            node --test worker/test/browser.test.mjs worker/test/policy.test.mjs
+            PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s deploy -p "test_*.py"
+          '
+
+  deploy:
+    name: Deploy to Azure
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 80
+    environment: production
+    concurrency:
+      group: autoqa-azure-production
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      AZURE_VM_NAME: ${{ vars.AZURE_VM_NAME }}
+      AZURE_CORE_OUTPUT: none
+    steps:
+      - name: Check production deployment settings
+        shell: bash
+        run: |
+          for key in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID AZURE_RESOURCE_GROUP AZURE_VM_NAME; do
+            if [[ -z "${!key}" ]]; then
+              echo "::error::Set the production environment variable $key."
+              exit 1
+            fi
+          done
+
+      - name: Sign in to Azure with GitHub OIDC
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy the tested revision on the VM
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The tested revision is invalid."
+            exit 1
+          fi
+
+          result_file=$(mktemp)
+          trap 'rm -f -- "$result_file"' EXIT
+          if ! az vm run-command invoke \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_VM_NAME" \
+            --command-id RunShellScript \
+            --scripts 'exec /usr/local/sbin/autoqa-deploy "$1"' \
+            --parameters "$GITHUB_SHA" \
+            --only-show-errors --output json >"$result_file" 2>/dev/null; then
+            echo "::error::Azure Run Command could not complete. Check the deployment identity and VM Guest Agent status."
+            exit 1
+          fi
+
+          python3 - "$result_file" "$GITHUB_SHA" <<'PY'
+          import json
+          import sys
+
+          try:
+              with open(sys.argv[1], encoding="utf-8") as result:
+                  entries = json.load(result)["value"]
+              lines = {
+                  line.strip()
+                  for entry in entries
+                  if entry["code"] == "ComponentStatus/StdOut/succeeded"
+                  for line in entry["message"].splitlines()
+              }
+          except (OSError, ValueError, TypeError, KeyError, AttributeError):
+              lines = set()
+
+          sha = sys.argv[2]
+          if f"AUTOQA_DEPLOY_OK {sha}" in lines:
+              print(f"Azure VM is serving the tested revision {sha}.")
+          elif f"AUTOQA_DEPLOY_SKIPPED {sha}" in lines:
+              print(f"Skipped revision {sha} because main moved.")
+          else:
+              stages = ("setup", "checkout", "lock", "fetch", "private-env", "fast-forward", "compose", "record")
+              stage = next((item for item in stages if f"AUTOQA_DEPLOY_FAILED {sha} {item}" in lines), None)
+              hint = f" during {stage}" if stage else ""
+              print(f"::error::The VM did not confirm deployment{hint}. Check the VM runner setup and deployment log.")
+              sys.exit(1)
+          PY
