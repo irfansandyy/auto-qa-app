@@ -120,6 +120,13 @@ class RepairSandbox
                     $this->waitForPreview($preview, $result);
                     $result['checks'][$gate] = $this->replay($plan, $source, $preview, $readOnly);
                     $result[$gate] = $result['checks'][$gate]['passed'] === true;
+                    if ($gate === 'original_replay' && $result[$gate]) {
+                        $before = $this->evidenceImage($run->report['failure']['artifact'] ?? null);
+                        $after = $result['checks'][$gate]['preview_artifact'] ?? null;
+                        if ($before !== null && $after !== null && $before !== $after) {
+                            $result['visual_comparison'] = ['before' => $before, 'after' => $after];
+                        }
+                    }
                     if (! $result[$gate]) {
                         throw new RuntimeException('The patched preview did not satisfy '.$gate.'.');
                     }
@@ -204,6 +211,7 @@ class RepairSandbox
     {
         $session = null;
         $assertions = 0;
+        $previewArtifact = null;
         $password = Str::random(24).'A1!';
         $deadline = microtime(true) + min(180, max(30, (int) config('autoqa.runner_timeout', 240)));
         try {
@@ -248,10 +256,12 @@ class RepairSandbox
                         throw new RuntimeException('The patched browser scenario failed its deterministic assertion.');
                     }
                     $assertions++;
+                    $previewArtifact = $this->evidenceImage($observation['preview_artifact'] ?? null);
                 }
             }
 
-            return ['passed' => $assertions > 0, 'assertions' => $assertions, 'steps' => count($actions)];
+            return ['passed' => $assertions > 0, 'assertions' => $assertions, 'steps' => count($actions),
+                ...($previewArtifact !== null ? ['preview_artifact' => $previewArtifact] : [])];
         } finally {
             if ($session !== null) {
                 try {
@@ -260,6 +270,11 @@ class RepairSandbox
                 }
             }
         }
+    }
+
+    private function evidenceImage(mixed $filename): ?string
+    {
+        return is_string($filename) && preg_match('/\Abrowser-[a-zA-Z0-9-]+\.png\z/', $filename) === 1 ? $filename : null;
     }
 
     private function validatePlan(mixed $actions, int $limit, bool $requireInteraction, bool $readOnly): void

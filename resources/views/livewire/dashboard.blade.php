@@ -6,31 +6,37 @@
     <aside class="sidebar" aria-label="{{ __('ui.workspace_navigation') }}">
         <a href="{{ route('dashboard') }}" class="brand">{{ __('ui.app_name') }}</a>
 
-        <nav class="main-nav" aria-label="{{ __('ui.main_navigation') }}">
-            <button type="button" wire:click="setPanel('workspace')" class="nav-item {{ $panel === 'workspace' ? 'is-active' : '' }}" @if ($panel === 'workspace') aria-current="page" @endif>
-                <x-icon name="dashboard" />
-                {{ __('ui.projects') }}
-            </button>
-            <button type="button" wire:click="setPanel('settings')" class="nav-item {{ $panel === 'settings' ? 'is-active' : '' }}" @if ($panel === 'settings') aria-current="page" @endif>
-                <x-icon name="settings" />
-                {{ __('ui.settings') }}
-            </button>
-        </nav>
-
-        <div class="sidebar-heading">{{ __('ui.projects') }} <span>{{ $projects->count() }}</span></div>
-        <div class="project-nav">
-            @forelse ($projects as $item)
-                <button type="button" wire:key="project-nav-{{ $item->id }}" wire:click="selectProject({{ $item->id }})" class="project-nav-item {{ $selectedProjectId === $item->id && $panel === 'workspace' ? 'is-selected' : '' }}">
-                    {{ $item->name }}
+        <details class="project-switcher" x-data x-on:click.outside="$el.removeAttribute('open')" x-on:keydown.escape="$el.removeAttribute('open'); $el.querySelector('summary').focus()">
+            <summary aria-label="{{ __('workspace.switch_project') }}">
+                <x-icon :name="$project && ! ($showingProjectForm && ! $editingProjectId) ? 'folder' : 'add'" />
+                <span>{{ $project && ! ($showingProjectForm && ! $editingProjectId) ? $project->name : __('ui.new_project') }}</span>
+            </summary>
+            <div class="project-switcher-menu">
+                @foreach ($projects as $item)
+                    <button type="button" wire:key="switch-project-{{ $item->id }}" wire:click="switchProject({{ $item->id }})" x-on:click="$el.closest('details').removeAttribute('open')" @if ($selectedProjectId === $item->id && ! $showingProjectForm) aria-current="true" @endif>
+                        <x-icon name="folder" />
+                        <span>{{ $item->name }}</span>
+                    </button>
+                @endforeach
+                <button type="button" wire:click="newProject" x-on:click="$el.closest('details').removeAttribute('open')">
+                    <x-icon name="add" />
+                    <span>{{ __('ui.new_project') }}</span>
                 </button>
-            @empty
-                <p class="sidebar-empty">{{ __('ui.no_projects_sidebar') }}</p>
-            @endforelse
-            <button class="project-nav-item add-project" type="button" wire:click="newProject">
-                <x-icon name="add" />
-                {{ __('ui.add_project') }}
-            </button>
-        </div>
+            </div>
+        </details>
+
+        <nav class="main-nav" aria-label="{{ __('ui.main_navigation') }}">
+            @foreach (['workspace' => 'dashboard', 'files' => 'folder', 'changes' => 'code', 'git' => 'commit', 'pull-requests' => 'merge', 'settings' => 'settings'] as $destination => $icon)
+                <button type="button" wire:key="workspace-nav-{{ $destination }}" wire:click="setPanel('{{ $destination }}')" class="nav-item {{ $panel === $destination ? 'is-active' : '' }}" @if ($panel === $destination) aria-current="page" @endif>
+                    <x-icon :name="$icon" />
+                    {{ __('workspace.nav.'.$destination) }}
+                </button>
+            @endforeach
+            <a href="{{ route('docs.github-app') }}" class="nav-item">
+                <x-icon name="assignment" />
+                {{ __('ui.help') }}
+            </a>
+        </nav>
 
         <div class="sidebar-bottom">
             <div class="operator">
@@ -52,18 +58,8 @@
         <header class="topbar">
             <div class="breadcrumb">
                 {{ __('ui.workspace') }} <span aria-hidden="true">/</span>
-                <strong>{{ $panel === 'settings' ? __('ui.settings') : __('ui.projects') }}</strong>
+                <strong>{{ __('workspace.nav.'.$panel) }}</strong>
             </div>
-            @if ($projects->isNotEmpty())
-                <div class="mobile-project-picker">
-                    <label for="mobile-project">{{ __('ui.project') }}</label>
-                    <select id="mobile-project" wire:change="selectProject($event.target.value)">
-                        @foreach ($projects as $item)
-                            <option value="{{ $item->id }}" @selected($selectedProjectId === $item->id)>{{ $item->name }}</option>
-                        @endforeach
-                    </select>
-                </div>
-            @endif
         </header>
 
         <div class="page-body">
@@ -124,11 +120,11 @@
                             </div>
                             <div class="segmented-control" role="radiogroup" aria-labelledby="appearance-label" aria-describedby="appearance-help">
                                 <label>
-                                    <input type="radio" name="theme" value="light" @checked(old('theme', $theme ?? 'light') === 'light')>
+                                    <input type="radio" name="theme" value="light" @checked(old('theme', $theme ?? 'dark') === 'light')>
                                     <span>{{ __('preferences.light') }}</span>
                                 </label>
                                 <label>
-                                    <input type="radio" name="theme" value="dark" @checked(old('theme', $theme ?? 'light') === 'dark')>
+                                    <input type="radio" name="theme" value="dark" @checked(old('theme', $theme ?? 'dark') === 'dark')>
                                     <span>{{ __('preferences.dark') }}</span>
                                 </label>
                             </div>
@@ -159,6 +155,7 @@
                                 <span class="field-hint">{{ __('ui.github_name_hint') }}</span>
                             @endif
                         </div>
+                        <a href="{{ route('docs.github-app') }}" class="text-link">{{ __('ui.github_app_guide') }}</a>
                         <p class="fine-print">{{ __('ui.repository_access_hint') }}</p>
                     </section>
 
@@ -218,21 +215,25 @@
                         {{ __('ui.policy_authorization_before') }} <strong>{{ __('ui.verified_draft_pr') }}</strong> {{ __('ui.policy_authorization_after') }}
                     </p>
                 </section>
+            @elseif (in_array($panel, $repositorySections, true))
+                <livewire:repository-workspace
+                    :section="$panel"
+                    :project-id="$project?->id"
+                    :run-id="$repositoryRunId"
+                    :pull-number="$repositoryPullNumber"
+                    :key="'repository-'.$panel.'-'.$selectedProjectId.'-'.$repositoryRunId.'-'.$repositoryPullNumber"
+                />
             @else
                 <div class="page-heading">
                     <div>
-                        <h1>{{ $showingProjectForm ? __('ui.project_details') : __('ui.projects') }}</h1>
-                        <p>{{ $showingProjectForm ? __('ui.project_details_description') : __('ui.projects_description') }}</p>
+                        <h1>{{ $showingProjectForm ? __('ui.project_details') : __('workspace.nav.workspace') }}</h1>
+                        <p>{{ $showingProjectForm ? __('ui.project_details_description') : __('workspace.runs_description') }}</p>
                     </div>
                     @if (! $showingProjectForm)
                         <div class="action-row">
                             @if ($project)
                                 <button class="button button-secondary" type="button" wire:click="editProject({{ $project->id }})">{{ __('ui.edit_project') }}</button>
                             @endif
-                            <button class="button button-secondary" type="button" wire:click="newProject">
-                                <x-icon name="add" />
-                                {{ __('ui.new_project') }}
-                            </button>
                         </div>
                     @endif
                 </div>
@@ -302,6 +303,24 @@
                                         <span id="repository-error" class="field-error">{{ $message }}</span>
                                     @enderror
                                 </div>
+
+                                <fieldset class="qa-sector-options" aria-describedby="qa-sector-options-help">
+                                    <legend>{{ __('qa-sectors.title') }}</legend>
+                                    <p id="qa-sector-options-help" class="field-hint">{{ __('qa-sectors.settings_help') }}</p>
+                                    <div class="qa-sector-grid">
+                                        @foreach ($availableQaSectors as $sector)
+                                            <label class="qa-sector-option">
+                                                <input type="checkbox" wire:model="qaSectors" value="{{ $sector }}">
+                                                <span>
+                                                    <strong>{{ __('qa-sectors.names.'.$sector) }}</strong>
+                                                    <small>{{ __('qa-sectors.descriptions.'.$sector) }}</small>
+                                                </span>
+                                            </label>
+                                        @endforeach
+                                    </div>
+                                    @error('qaSectors') <span class="field-error">{{ $message }}</span> @enderror
+                                    @error('qaSectors.*') <span class="field-error">{{ $message }}</span> @enderror
+                                </fieldset>
 
                                 @if (filled($repositoryUrl))
                                 <fieldset class="policy-field">
@@ -394,9 +413,26 @@
                             </div>
                             <span class="project-target">{{ $project->target_mode === 'local' ? __('ui.local_target') : __('ui.public_target') }}</span>
                         </div>
-                        <p class="project-scope">{{ __('ui.project_auto_check') }}</p>
-                        <div class="field run-guidance">
-                            <label for="run-guidance">{{ __('ui.run_guidance') }} <span class="field-optional">{{ __('ui.optional') }}</span></label>
+                        <div class="project-scope qa-project-scope">
+                            @if ($project->qaSectors() !== [])
+                                <p class="field-hint">{{ __('qa-sectors.enabled') }}</p>
+                                <ul class="qa-sector-chips">
+                                    @foreach ($project->qaSectors() as $sector)
+                                        <li>{{ __('qa-sectors.names.'.$sector) }}</li>
+                                    @endforeach
+                                </ul>
+                            @else
+                                <p>{{ __('qa-sectors.none_enabled') }}</p>
+                            @endif
+                        </div>
+                        <div class="field run-guidance" x-data x-on:qa-guidance-filled.window="$nextTick(() => $el.querySelector('textarea').focus())">
+                            <div class="guidance-heading" x-data>
+                                <label for="run-guidance">{{ __('ui.run_guidance') }} <span class="field-optional">{{ __('ui.optional') }}</span></label>
+                                <button class="button button-secondary guidance-generate" type="button" wire:click="generateRunGuidance" wire:loading.attr="disabled" wire:target="generateRunGuidance" x-bind:disabled="$wire.runGuidance.trim().length > 0">
+                                    <x-icon name="guidance-stars" />
+                                    {{ __('workspace.generate_guidance') }}
+                                </button>
+                            </div>
                             <textarea id="run-guidance" wire:model="runGuidance" rows="2" maxlength="1000" aria-describedby="run-guidance-hint @error('runGuidance') run-guidance-error @enderror" @error('runGuidance') aria-invalid="true" @enderror placeholder="{{ __('ui.run_guidance_placeholder') }}"></textarea>
                             <p id="run-guidance-hint" class="field-hint">{{ __('ui.run_guidance_hint') }}</p>
                             @error('runGuidance') <p id="run-guidance-error" class="field-error" role="alert">{{ $message }}</p> @enderror
@@ -425,8 +461,12 @@
                     @enderror
                     @if (! $canStartRun)
                         <div class="notice notice-warning">
-                            {{ __('ui.configure_browser_hint') }}
-                            <button class="inline-link" type="button" wire:click="setPanel('settings')">{{ __('ui.open_settings') }}</button>
+                            {{ $runConfigurationIssue }}
+                            @if ($runConfigurationIssue === __('ui.configure_browser_hint'))
+                                <button class="inline-link" type="button" wire:click="setPanel('settings')">{{ __('ui.open_settings') }}</button>
+                            @else
+                                <button class="inline-link" type="button" wire:click="editProject({{ $project->id }})">{{ __('qa-sectors.edit_project') }}</button>
+                            @endif
                         </div>
                     @elseif ($project->repository_url && ! $modelReady)
                         <p class="source-note">{{ __('ui.repair_model_hint') }}</p>
@@ -436,6 +476,30 @@
                     @endif
 
                     <div class="run-layout {{ $runs->isEmpty() ? 'is-empty' : '' }}">
+                        @if ($runs->isNotEmpty())
+                            <aside class="run-aside">
+                                <section class="card history-card">
+                                    <div class="section-heading">
+                                        <h2>{{ __('ui.recent_runs') }}</h2>
+                                    </div>
+                                    @foreach ($runs as $previous)
+                                        <button class="history-item {{ $selectedRunId === $previous->id ? 'is-selected' : '' }}" type="button" wire:click="selectRun({{ $previous->id }})" wire:key="history-{{ $previous->id }}">
+                                            <span>
+                                                <strong>{{ __('ui.run_number', ['number' => $previous->id]) }}</strong>
+                                                <x-local-time :date="$previous->created_at" :identity="'history-'.$previous->id" />
+                                                @if ($previous->advanced)
+                                                    <span>{{ __($previous->guidance ? 'ui.guided_run' : 'ui.automatic_run') }}</span>
+                                                @endif
+                                            </span>
+                                            <span class="history-status">
+                                                <span class="history-indicator history-indicator-{{ in_array($previous->status, ['failed', 'blocked', 'needs_configuration', 'verification_failed'], true) ? 'attention' : (in_array($previous->status, $terminalStatuses, true) ? 'finished' : 'active') }}" aria-hidden="true"></span>
+                                                {{ __('ui.status.'.$previous->status) }}
+                                            </span>
+                                        </button>
+                                    @endforeach
+                                </section>
+                            </aside>
+                        @endif
                         <section class="card run-main">
                             @if (! $run)
                                 <div class="empty-run">
@@ -500,12 +564,14 @@
                                         <h3 id="report-summary-heading">{{ __('ui.report_summary') }}</h3>
                                         <p>{{ $activityMessage($run->report['message'] ?? null, $run->report['summary'], ['status' => $run->report['failure']['document_status'] ?? '']) }}</p>
                                         @if (is_string($run->report['coverage'] ?? null))
-                                            <p class="field-hint">{{ $run->advanced ? __('ui.advanced_coverage') : ($run->automatic ? __('ui.automatic_coverage') : $run->report['coverage']) }}</p>
+                                            <p class="field-hint">{{ $run->advanced ? (isset($run->report['audit']['sectors']) ? __('qa-sectors.run_scope') : __('ui.advanced_coverage')) : ($run->automatic ? __('ui.automatic_coverage') : $run->report['coverage']) }}</p>
                                         @endif
                                     </section>
                                 @endif
 
-                                @if (is_array($audit = $run->report['audit'] ?? null))
+                                @if (is_array($run->report['audit']['sectors'] ?? null))
+                                    @include('partials.qa-sector-report', ['audit' => $run->report['audit']])
+                                @elseif (is_array($audit = $run->report['audit'] ?? null))
                                     @php
                                         $repositoryAudit = $audit['repository'] ?? [];
                                         $frontendAudit = $audit['frontend'] ?? [];
@@ -620,71 +686,20 @@
                                     @endforelse
                                 </ol>
 
-                                @if ($run->findings->isNotEmpty())
+                                @if (! is_array($run->report['audit']['sectors'] ?? null) && $run->findings->isNotEmpty())
                                     <div class="finding-section">
                                         <h3>{{ __('ui.findings_count', ['count' => $run->findings->count()]) }}</h3>
                                         @foreach ($run->findings as $finding)
-                                            @php
-                                                $findingCategory = $finding->evidence['category'] ?? '';
-                                                $findingCategoryLabel = __('ui.audit.category')[$findingCategory] ?? null;
-                                                $advisoryUrl = $finding->evidence['advisory_url'] ?? null;
-                                            @endphp
-                                            <article class="finding" wire:key="finding-{{ $finding->id }}">
-                                                <div class="finding-heading">
-                                                    <div>
-                                                        @if ($findingCategoryLabel)
-                                                            <p class="field-hint finding-category">{{ $findingCategoryLabel }}</p>
-                                                        @endif
-                                                        <h4>{{ $finding->title }}</h4>
-                                                    </div>
-                                                    <span class="badge badge-warning">{{ __('ui.severity.'.$finding->severity) }}</span>
-                                                </div>
-                                                <dl>
-                                                    <dt>{{ __('ui.expected') }}</dt>
-                                                    <dd>{{ $finding->expected }}</dd>
-                                                    <dt>{{ __('ui.observed') }}</dt>
-                                                    <dd>{{ $finding->actual }}</dd>
-                                                </dl>
-                                                @if (is_string($finding->evidence['path'] ?? null))
-                                                    <p class="field-hint finding-location">{{ __('ui.audit.location') }} <code>{{ $finding->evidence['path'] }}{{ isset($finding->evidence['line']) ? ':'.$finding->evidence['line'] : '' }}</code></p>
-                                                @endif
-                                                @if (is_string($finding->evidence['remediation'] ?? null))
-                                                    <div class="finding-remediation">
-                                                        <h5>{{ __('ui.audit.remediation') }}</h5>
-                                                        <p>{{ $finding->evidence['remediation'] }}</p>
-                                                    </div>
-                                                @endif
-                                                @if (is_string($finding->evidence['suggested_change'] ?? null))
-                                                    <details class="evidence-details">
-                                                        <summary>{{ __('ui.audit.suggested_change') }}</summary>
-                                                        <pre>{{ $finding->evidence['suggested_change'] }}</pre>
-                                                    </details>
-                                                @endif
-                                                @if (is_string($advisoryUrl) && preg_match('~\Ahttps://(?:osv\.dev/vulnerability/[A-Za-z0-9._-]+|github\.com/advisories/GHSA-[A-Za-z0-9-]+|www\.cve\.org/CVERecord\?id=CVE-[0-9-]+)\z~', $advisoryUrl))
-                                                    <a class="text-link" href="{{ $advisoryUrl }}" target="_blank" rel="noopener noreferrer">{{ __('ui.audit.advisory') }}</a>
-                                                @endif
-                                                @if (is_string($finding->evidence['artifact'] ?? null) && preg_match('/\Abrowser-[a-zA-Z0-9-]+\.png\z/', $finding->evidence['artifact']))
-                                                    <a class="text-link" href="{{ route('runs.evidence', [$run, $finding->evidence['artifact']]) }}" target="_blank" rel="noopener noreferrer">
-                                                        <x-icon name="image" />
-                                                        {{ __('ui.view_screenshot') }}
-                                                    </a>
-                                                @endif
-                                                @if ($finding->evidence)
-                                                    <details class="evidence-details">
-                                                        <summary>{{ __('ui.view_evidence') }}</summary>
-                                                        <pre>{{ json_encode($finding->evidence, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) }}</pre>
-                                                    </details>
-                                                @endif
-                                            </article>
+                                            @include('partials.qa-finding', ['finding' => $finding])
                                         @endforeach
                                     </div>
                                 @endif
 
                                 @if ($run->patch_files)
-                                    <details class="result-details">
-                                        <summary>{{ __('ui.proposed_changes') }}</summary>
-                                        <pre>{{ json_encode($run->patch_files, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) }}</pre>
-                                    </details>
+                                    <a class="button button-secondary run-changes-link" href="{{ route('dashboard', ['project' => $project->id, 'panel' => 'changes', 'run' => $run->id]) }}">
+                                        <x-icon name="code" />
+                                        {{ __('ui.proposed_changes') }}
+                                    </a>
                                 @endif
                                 @if ($run->verification)
                                     <details class="result-details">
@@ -698,6 +713,8 @@
                                         <pre>{{ json_encode($run->report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) }}</pre>
                                     </details>
                                 @endif
+
+                                @include('partials.repair-visual-comparison')
 
                                 @if (is_array($run->report['artifacts'] ?? null) && count($run->report['artifacts']))
                                     <section class="finding-section" aria-labelledby="browser-evidence-heading">
@@ -718,13 +735,13 @@
                                     </section>
                                 @endif
 
-                                @if ($run->pr_url && preg_match('~^https://github\.com/[^/]+/[^/]+/pull/[0-9]+$~', $run->pr_url))
+                                @if ($runPullNumber)
                                     <div class="pr-result">
                                         <div>
                                             <strong>{{ __('ui.draft_pr_ready') }}</strong>
                                             <p>{{ __('ui.review_repair_hint') }}</p>
                                         </div>
-                                        <a class="button button-primary" href="{{ $run->pr_url }}" target="_blank" rel="noopener noreferrer">
+                                        <a class="button button-primary" href="{{ route('dashboard', ['project' => $project->id, 'panel' => 'pull-requests', 'pull' => $runPullNumber]) }}">
                                             <x-icon name="github" />
                                             {{ __('ui.review_draft_pr') }}
                                         </a>
@@ -733,27 +750,6 @@
                             @endif
                         </section>
 
-                        @if ($runs->isNotEmpty())
-                            <aside class="run-aside">
-                                <section class="card history-card">
-                                    <div class="section-heading">
-                                        <h2>{{ __('ui.recent_runs') }}</h2>
-                                    </div>
-                                    @foreach ($runs as $previous)
-                                        <button class="history-item {{ $selectedRunId === $previous->id ? 'is-selected' : '' }}" type="button" wire:click="selectRun({{ $previous->id }})" wire:key="history-{{ $previous->id }}">
-                                            <span>
-                                                <strong>{{ __('ui.run_number', ['number' => $previous->id]) }}</strong>
-                                                <x-local-time :date="$previous->created_at" :identity="'history-'.$previous->id" />
-                                                @if ($previous->advanced)
-                                                    <span>{{ __($previous->guidance ? 'ui.guided_run' : 'ui.automatic_run') }}</span>
-                                                @endif
-                                            </span>
-                                            <span class="history-status">{{ __('ui.status.'.$previous->status) }}</span>
-                                        </button>
-                                    @endforeach
-                                </section>
-                            </aside>
-                        @endif
                     </div>
                 @else
                     <section class="card empty-run">

@@ -1,1 +1,1 @@
-//
+import './repository-editor';

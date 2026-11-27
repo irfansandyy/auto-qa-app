@@ -187,6 +187,26 @@ class EvidenceTest extends TestCase
             ->assertDontSee('/evidence/../private.png');
     }
 
+    public function test_comparison_is_available_in_the_owner_run_and_the_after_image_stays_private(): void
+    {
+        $project = Project::factory()->create();
+        $before = 'browser-before.png';
+        $after = 'browser-after.png';
+        $run = QaRun::factory()->for($project)->create([
+            'report' => ['artifacts' => [['filename' => $before]]],
+            'verification' => ['visual_comparison' => ['before' => $before, 'after' => $after]],
+        ]);
+        $this->fixture($before);
+        $this->fixture($after);
+        $old = route('runs.evidence', [$run, $before]);
+        $new = route('runs.evidence', [$run, $after]);
+
+        $this->actingAs($project->user)->get(route('dashboard'))->assertOk()
+            ->assertSee('Before and after the repair')->assertSee($old)->assertSee($new);
+        $this->get($new)->assertOk()->assertHeader('Content-Type', 'image/png');
+        $this->actingAs(User::factory()->create())->get($new)->assertNotFound();
+    }
+
     private function fixture(string $filename): string
     {
         $contents = str_ends_with($filename, '.png')

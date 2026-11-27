@@ -56,8 +56,7 @@ class RepositoryReviewTest extends TestCase
         $github->shouldNotReceive('inspectRepository', 'archiveSnapshot', 'commitRepair', 'createDraftPullRequest');
         $github->shouldReceive('repositoryTree')->once()->with(self::REPOSITORY, self::SHA)
             ->andReturn(array_map(static fn (string $path): array => ['path' => $path, 'size' => 150], $available));
-        $github->shouldReceive('readFiles')->once()->withArgs(fn ($repository, $sha, $paths) =>
-            $repository === self::REPOSITORY && $sha === self::SHA && $paths[0] === 'app/Services/Orders.php'
+        $github->shouldReceive('readFiles')->once()->withArgs(fn ($repository, $sha, $paths) => $repository === self::REPOSITORY && $sha === self::SHA && $paths[0] === 'app/Services/Orders.php'
             && in_array('config/app.php', $paths, true) && count($paths) === 12)->andReturn($affectedFiles);
         $github->shouldReceive('readReviewLockfiles')->once()->with(self::REPOSITORY, self::SHA)->andReturn([]);
 
@@ -158,6 +157,29 @@ class RepositoryReviewTest extends TestCase
         $this->assertSame('unavailable', $result['coverage']['advisory_status']);
         $this->assertSame(0, $result['coverage']['packages_reviewed']);
         $this->assertSame([], $result['findings']);
+    }
+
+    public function test_database_sector_reviews_migrations_and_query_call_sites_without_reading_lockfiles(): void
+    {
+        $project = $this->approvedProject();
+        $migration = 'database/migrations/2026_11_27_000000_update_orders.php';
+        $source = 'app/Services/Orders.php';
+        $github = $this->mock(GitHubAppClient::class);
+        $github->shouldReceive('repositoryTree')->once()->with(self::REPOSITORY, self::SHA, true)
+            ->andReturn([['path' => $migration], ['path' => $source]]);
+        $github->shouldReceive('readFiles')->once()->with(self::REPOSITORY, self::SHA, [$migration, $source])->andReturn([
+            $migration => '<?php function up() { Schema::dropIfExists("orders_archive"); }',
+            $source => '<?php function collectOrders(array $ids) { foreach ($ids as $id) { DB::table("orders")->where("id", $id)->first(); } }',
+        ]);
+        $github->shouldNotReceive('readReviewLockfiles', 'archiveSnapshot');
+
+        $result = app(RepositoryReview::class)->review($project, self::SHA, sectors: ['database']);
+
+        $this->assertSame('reviewed', $result['coverage']['database_status']);
+        $this->assertSame('reviewed', $result['coverage']['query_status']);
+        $this->assertSame(1, $result['coverage']['query_files_reviewed']);
+        $this->assertSame(['destructive_forward_migration', 'query_inside_loop'], array_column(array_column($result['findings'], 'evidence'), 'rule'));
+        Http::assertNothingSent();
     }
 
     private function approvedProject(): Project

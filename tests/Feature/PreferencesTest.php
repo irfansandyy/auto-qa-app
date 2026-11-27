@@ -21,16 +21,17 @@ class PreferencesTest extends TestCase
         $this->withoutVite();
     }
 
-    public function test_new_users_receive_english_light_preferences_and_matching_server_rendered_markup(): void
+    public function test_new_users_and_guests_default_to_english_dark_preferences(): void
     {
+        $this->get(route('login'))->assertOk()->assertSee('data-theme="dark"', false);
         $operator = User::factory()->create();
 
         $response = $this->actingAs($operator)->get(route('dashboard'));
 
         $this->assertSame('en', $operator->fresh()->locale);
-        $this->assertSame('light', $operator->fresh()->theme);
-        $response->assertOk()->assertSee('lang="en"', false)->assertSee('data-theme="light"', false)
-            ->assertSee('name="color-scheme" content="light"', false);
+        $this->assertSame('dark', $operator->fresh()->theme);
+        $response->assertOk()->assertSee('lang="en"', false)->assertSee('data-theme="dark"', false)
+            ->assertSee('name="color-scheme" content="dark"', false);
     }
 
     public function test_preferences_require_authentication_without_changing_any_user(): void
@@ -40,7 +41,7 @@ class PreferencesTest extends TestCase
         $response = $this->post(route('settings.preferences'), ['locale' => 'id', 'theme' => 'dark']);
 
         $response->assertRedirect(route('login'));
-        $this->assertDatabaseHas('users', ['id' => $operator->id, 'locale' => 'en', 'theme' => 'light']);
+        $this->assertDatabaseHas('users', ['id' => $operator->id, 'locale' => 'en', 'theme' => 'dark']);
         $response->assertCookieMissing('autoqa_locale')->assertCookieMissing('autoqa_theme');
     }
 
@@ -48,8 +49,8 @@ class PreferencesTest extends TestCase
     {
         $this->travelTo(new DateTimeImmutable('2026-10-13 10:00:00 UTC'));
         $expectedExpiry = (new DateTimeImmutable('2027-10-13 10:00:00 UTC'))->getTimestamp();
-        $operator = User::factory()->create();
-        $foreign = User::factory()->create();
+        $operator = User::factory()->create(['theme' => 'light']);
+        $foreign = User::factory()->create(['theme' => 'light']);
         $originalName = $operator->name;
         $originalEmail = $operator->email;
 
@@ -85,7 +86,7 @@ class PreferencesTest extends TestCase
 
         $response->assertSessionHasErrors($errors)
             ->assertCookieMissing('autoqa_locale')->assertCookieMissing('autoqa_theme');
-        $this->assertDatabaseHas('users', ['id' => $operator->id, 'locale' => 'en', 'theme' => 'light']);
+        $this->assertDatabaseHas('users', ['id' => $operator->id, 'locale' => 'en', 'theme' => 'dark']);
     }
 
     public static function invalidPreferences(): array
@@ -165,20 +166,20 @@ class PreferencesTest extends TestCase
     {
         User::factory()->create();
 
-        $response = $this->withCookies(['autoqa_locale' => 'id', 'autoqa_theme' => 'dark'])->get(route('login'));
+        $response = $this->withCookies(['autoqa_locale' => 'id', 'autoqa_theme' => 'light'])->get(route('login'));
 
-        $response->assertOk()->assertSee('lang="id"', false)->assertSee('data-theme="dark"', false)
-            ->assertSee('name="color-scheme" content="dark"', false)->assertSee('Masuk ke ruang kerja');
+        $response->assertOk()->assertSee('lang="id"', false)->assertSee('data-theme="light"', false)
+            ->assertSee('name="color-scheme" content="light"', false)->assertSee('Masuk ke ruang kerja');
     }
 
-    public function test_invalid_guest_cookies_fall_back_to_english_light_without_entering_html(): void
+    public function test_invalid_guest_cookies_fall_back_to_english_dark_without_entering_html(): void
     {
         User::factory()->create();
         $unsafe = '"><script>alert("preferences")</script>';
 
         $response = $this->withCookies(['autoqa_locale' => $unsafe, 'autoqa_theme' => $unsafe])->get(route('login'));
 
-        $response->assertOk()->assertSee('lang="en"', false)->assertSee('data-theme="light"', false)
+        $response->assertOk()->assertSee('lang="en"', false)->assertSee('data-theme="dark"', false)
             ->assertSee('Sign in to your workspace')->assertDontSee($unsafe, false);
     }
 

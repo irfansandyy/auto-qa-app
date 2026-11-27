@@ -45,6 +45,10 @@ class EvidenceController extends Controller
             return true;
         }
 
+        if (str_ends_with($filename, '.png') && ($run->verification['visual_comparison']['after'] ?? null) === $filename) {
+            return true;
+        }
+
         $artifacts = $run->report['artifacts'] ?? [];
         if (! is_array($artifacts)) {
             return false;

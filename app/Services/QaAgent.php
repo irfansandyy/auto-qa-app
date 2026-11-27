@@ -15,7 +15,7 @@ class QaAgent
 
     private const AUTOMATIC_COVERAGE = 'Checked the starting page and sampled visible links on the same site. Forms and signed-in behavior were not tested.';
 
-    private const ADVANCED_COVERAGE = 'Checked sampled public pages, browser layout and accessibility signals, and starting-page response settings. Repository coverage is shown below.';
+    private const ADVANCED_COVERAGE = 'Coverage applies to the enabled sectors and the samples listed in this report.';
 
     private ?string $qaPassword = null;
 
@@ -38,12 +38,17 @@ class QaAgent
         try {
             $identity = $run->automatic ? [] : $this->makeQaIdentity($run);
             $project = $run->project;
-            $this->targets->assertAllowed($project->website_url, $project->target_mode);
+            $needsBrowser = ! $run->advanced || QaSectors::needsBrowser($run->qaSectors());
+            if ($needsBrowser) {
+                $this->targets->assertAllowed($project->website_url, $project->target_mode);
+            }
             $this->updateActive($run, ['status' => 'testing', 'started_at' => now(), 'error' => null]);
             if (! $run->automatic) {
                 $this->model = $this->model->forUser($project->user);
             }
-            $this->step($run, 'start', 'Starting an isolated browser session.', $run->automatic ? ['message' => 'starting'] : []);
+            if ($needsBrowser) {
+                $this->step($run, 'start', 'Starting an isolated browser session.', $run->automatic ? ['message' => 'starting'] : []);
+            }
             if ($run->advanced) {
                 $this->runAdvancedReview($run);
 
@@ -180,6 +185,41 @@ class QaAgent
 
     private function runAdvancedReview(QaRun $run): void
     {
+        $sectors = $run->qaSectors();
+        $needsBrowser = QaSectors::needsBrowser($sectors);
+        [$journey, $artifacts] = $needsBrowser ? $this->runBrowserReview($run) : [null, []];
+        $repository = $this->reviewRepository($run, $journey['snapshot']['source_sha'] ?? null, $sectors);
+        $audit = [
+            'frontend' => $journey['frontend'] ?? ['status' => 'not_checked', 'pages_reviewed' => 0],
+            'hardening' => $journey['hardening'] ?? ['status' => 'not_checked'],
+            'performance' => $journey['performance'] ?? ['status' => 'not_checked', 'pages_reviewed' => 0],
+            'browser_status' => match (true) {
+                ! $needsBrowser => 'disabled',
+                $journey === null => 'unavailable',
+                $journey['checked_pages'] === [] && $journey['failure'] === null => 'unavailable',
+                default => 'reviewed',
+            },
+            'repository' => $repository,
+        ];
+        $audit['sectors'] = QaSectors::coverage($sectors, $audit, $run->findings()->get(['evidence']));
+
+        if ($journey === null) {
+            $completed = ! $needsBrowser && $this->completeSectorCoverage($audit) && ! $run->findings()->exists();
+            $this->finish($run, $completed ? 'completed' : 'report_ready', [
+                'message' => $needsBrowser ? 'browser_review_unavailable' : 'advanced_complete',
+                'summary' => $needsBrowser ? 'The browser review could not finish. See the reported coverage.' : 'The requested source review has finished. See the coverage for each enabled sector.',
+                'audit' => $audit, 'artifacts' => $artifacts, 'coverage' => self::ADVANCED_COVERAGE,
+            ]);
+
+            return;
+        }
+
+        $this->completeAutomaticJourney($run, $journey, $artifacts, $audit);
+    }
+
+    /** @return array{?array, array} */
+    private function runBrowserReview(QaRun $run): array
+    {
         $project = $run->project;
         $journey = null;
         $session = null;
@@ -203,26 +243,16 @@ class QaAgent
             }
         }
 
-        $repository = $this->reviewRepository($run, $journey['snapshot']['source_sha'] ?? null);
-        $audit = [
-            'frontend' => $journey['frontend'] ?? ['status' => 'unavailable', 'pages_reviewed' => 0],
-            'hardening' => $journey['hardening'] ?? ['status' => 'unavailable'],
-            'repository' => $repository,
-        ];
-        if ($journey === null) {
-            $this->finish($run, 'report_ready', ['message' => 'browser_review_unavailable', 'summary' => 'The browser review could not finish. See the reported coverage.',
-                'audit' => $audit, 'artifacts' => $artifacts, 'coverage' => self::ADVANCED_COVERAGE]);
-
-            return;
-        }
-
-        $this->completeAutomaticJourney($run, $journey, $artifacts, $audit);
+        return [$journey, $artifacts];
     }
 
-    private function reviewRepository(QaRun $run, ?string $observedSha): array
+    private function reviewRepository(QaRun $run, ?string $observedSha, array $sectors): array
     {
+        if (array_intersect($sectors, QaSectors::REPOSITORY) === []) {
+            return ['source_status' => 'disabled', 'advisory_status' => 'disabled', 'database_status' => 'disabled'];
+        }
         if (blank($run->project->repository_url)) {
-            return ['source_status' => 'not_connected', 'advisory_status' => 'not_checked'];
+            return ['source_status' => 'not_connected', 'advisory_status' => 'not_connected', 'database_status' => 'not_connected'];
         }
 
         $this->assertActive($run);
@@ -232,11 +262,11 @@ class QaAgent
             ? null
             : ($configuredSha ?: $observedSha);
         try {
-            $review = app(RepositoryReview::class)->review($run->project, $sourceSha, $run->guidance);
+            $review = app(RepositoryReview::class)->review($run->project, $sourceSha, $run->guidance, $sectors);
         } catch (RuntimeException|AuthorizationException) {
             $this->assertActive($run);
 
-            return ['source_status' => 'unavailable', 'advisory_status' => 'not_checked'];
+            return ['source_status' => 'unavailable', 'advisory_status' => 'unavailable', 'database_status' => 'unavailable'];
         }
         $this->assertActive($run);
         $run->findings()->createMany($review['findings']);
@@ -245,7 +275,7 @@ class QaAgent
     }
 
     /**
-     * @return array{actions: list<array<string, string>>, snapshot: array, failure: ?array, checked_pages: list<string>, passed: bool, control: list<array{tool: string, url: string}>, frontend: array, hardening: array}
+     * @return array{actions: list<array<string, string>>, snapshot: array, failure: ?array, checked_pages: list<string>, passed: bool, control: list<array{tool: string, url: string}>, frontend: array, hardening: array, performance: array}
      */
     private function checkAutomaticJourney(QaRun $run, string $session, array $state): array
     {
@@ -259,7 +289,14 @@ class QaAgent
         $failure = null;
         $frontend = ['status' => 'not_checked', 'pages_reviewed' => 0];
         $hardening = ['status' => 'not_checked'];
+        $performance = ['status' => 'not_checked', 'pages_reviewed' => 0, 'metrics' => []];
         $frontendAttempts = 0;
+        $performanceAttempts = 0;
+        $performancePartial = false;
+        $scanSectors = $run->advanced ? array_values(array_intersect($run->qaSectors(), ['security', 'ui', 'ux', 'performance'])) : [];
+        if ($run->advanced && array_intersect($run->qaSectors(), ['ui', 'ux', 'performance', 'backend']) === []) {
+            $linkLimit = 0;
+        }
 
         while (true) {
             $snapshot = $state['snapshot'];
@@ -282,14 +319,23 @@ class QaAgent
             ]);
             $failure = $this->observeAutomaticFailure($run, $state, $followedLinks > 0);
             $documentStatus = $snapshot['document_status'] ?? null;
-            if ($run->advanced && is_int($documentStatus) && $documentStatus >= 200 && $documentStatus < 300) {
-                $frontendAttempts++;
-                $review = $this->inspectPage($run, $session, $snapshot['url'], $followedLinks === 0);
+            $pageSectors = $followedLinks === 0 ? $scanSectors : array_values(array_diff($scanSectors, ['security']));
+            if ($pageSectors !== [] && is_int($documentStatus) && $documentStatus >= 200 && $documentStatus < 300) {
+                $frontendAttempts += array_intersect($pageSectors, ['ui', 'ux']) !== [] ? 1 : 0;
+                $performanceAttempts += in_array('performance', $pageSectors, true) ? 1 : 0;
+                $review = $this->inspectPage($run, $session, $snapshot['url'], $pageSectors);
                 if ($review['frontend']['status'] === 'reviewed') {
                     $frontend = [...$review['frontend'], 'pages_reviewed' => $frontend['pages_reviewed'] + 1];
                 }
                 if ($followedLinks === 0) {
                     $hardening = $review['hardening'];
+                }
+                if (in_array($review['performance']['status'], ['reviewed', 'partial'], true)) {
+                    $performance['pages_reviewed']++;
+                    $performancePartial = $performancePartial || $review['performance']['status'] === 'partial';
+                    foreach ($review['performance']['metrics'] as $metric => $value) {
+                        $performance['metrics'][$metric] = max($value, $performance['metrics'][$metric] ?? 0);
+                    }
                 }
                 $snapshot = $review['snapshot'] ?? $snapshot;
             }
@@ -324,19 +370,26 @@ class QaAgent
         if ($frontendAttempts > 0 && $frontend['pages_reviewed'] !== $frontendAttempts) {
             $frontend['status'] = $frontend['pages_reviewed'] === 0 ? 'unavailable' : 'partial';
         }
+        if ($performanceAttempts > 0) {
+            $performance['status'] = match (true) {
+                $performance['pages_reviewed'] === 0 => 'unavailable',
+                $performancePartial || $performance['pages_reviewed'] < $performanceAttempts => 'partial',
+                default => 'reviewed',
+            };
+        }
         $control = $failure !== null && isset($checkedPages[0]) && $checkedPages[0] !== $failure['url']
             ? [['tool' => 'assert_page', 'url' => $checkedPages[0]]]
             : [];
 
         return ['actions' => $actions, 'snapshot' => $snapshot, 'failure' => $failure, 'checked_pages' => $checkedPages,
             'passed' => $failure === null && ($state['assertion']['passed'] ?? null) === true, 'control' => $control,
-            'frontend' => $frontend, 'hardening' => $hardening];
+            'frontend' => $frontend, 'hardening' => $hardening, 'performance' => $performance];
     }
 
-    private function inspectPage(QaRun $run, string $session, string $url, bool $reviewHardening): array
+    private function inspectPage(QaRun $run, string $session, string $url, array $sectors): array
     {
         try {
-            $observation = $this->browser->act($session, ['tool' => 'inspect_frontend']);
+            $observation = $this->browser->act($session, ['tool' => 'inspect_qa', 'sectors' => $sectors]);
         } catch (RuntimeException) {
             $observation = [];
         }
@@ -344,10 +397,7 @@ class QaAgent
         if (($observation['snapshot']['url'] ?? null) !== $url) {
             $observation = [];
         }
-        if (! $reviewHardening) {
-            unset($observation['hardening']);
-        }
-        $review = app(WebsiteReview::class)->summarize($observation, $run->project->target_mode, $this->previewArtifact($observation));
+        $review = app(WebsiteReview::class)->summarize($observation, $run->project->target_mode, $this->previewArtifact($observation), $sectors);
         foreach ($review['findings'] as $finding) {
             $run->findings()->create([...$finding, 'evidence' => [...$finding['evidence'], 'url' => $url]]);
         }
@@ -419,11 +469,16 @@ class QaAgent
         $serverError = $status >= 500;
         $failure = ['network_errors' => [['url' => $url, 'status' => $status]], 'assertion' => $state['assertion'] ?? null,
             'url' => $url, 'artifact' => $this->previewArtifact($state), 'method' => 'GET', 'document_status' => $status];
-        $run->findings()->create([
-            'title' => $serverError ? 'A server error interrupted the browser check' : ($followedLink ? 'A link led to a missing page' : 'The starting page could not be found'),
-            'severity' => $serverError ? 'high' : 'medium', 'status' => 'observed', 'expected' => $run->expected_behavior,
-            'actual' => 'The page responded with HTTP '.$status.'.', 'evidence' => $failure,
-        ]);
+        $sector = $serverError ? 'backend' : 'ux';
+        if (! $run->advanced || in_array($sector, $run->qaSectors(), true)) {
+            $run->findings()->create([
+                'title' => $serverError ? 'A server error interrupted the browser check' : ($followedLink ? 'A link led to a missing page' : 'The starting page could not be found'),
+                'severity' => $serverError ? 'high' : 'medium', 'status' => 'observed', 'expected' => $run->expected_behavior,
+                'actual' => 'The page responded with HTTP '.$status.'.', 'evidence' => [...$failure, 'sector' => $sector,
+                    'rule' => $serverError ? 'document_server_error' : 'missing_document',
+                    'remediation' => $serverError ? 'Review sanitized server logs for this route and verify a fix in staging.' : 'Review the route and the displayed navigation link, then check that the intended page loads.'],
+            ]);
+        }
 
         return $failure;
     }
@@ -438,10 +493,7 @@ class QaAgent
             ...($audit !== null ? ['audit' => $audit] : [])];
         if ($failure === null) {
             if ($audit !== null) {
-                $reportReady = $run->findings()->exists() || ! $journey['passed'] || $audit['frontend']['status'] !== 'reviewed'
-                    || $audit['hardening']['status'] !== 'reviewed'
-                    || ! in_array($audit['repository']['source_status'], ['not_connected', 'reviewed'], true)
-                    || ! in_array($audit['repository']['advisory_status'], ['not_checked', 'reviewed'], true);
+                $reportReady = $run->findings()->exists() || ! $journey['passed'] || ! $this->completeSectorCoverage($audit);
                 $this->finish($run, $reportReady ? 'report_ready' : 'completed', [...$report, 'message' => 'advanced_complete',
                     'summary' => 'The review has finished. See the findings and the coverage for each check.']);
 
@@ -460,6 +512,7 @@ class QaAgent
         $status = $failure['document_status'];
         $observedMissingLink = in_array($status, [404, 410], true) && $checkedPages !== [];
         $suggestSourceRepair = $observedMissingLink || ($status >= 500 && ! in_array($status, [502, 503, 504], true));
+        $suggestSourceRepair = $suggestSourceRepair && (! $run->advanced || in_array($observedMissingLink ? 'ux' : 'backend', $run->qaSectors(), true));
         if (blank($run->project->repository_url) || ! $suggestSourceRepair) {
             $this->finish($run, 'report_ready', [...$report, 'message' => 'http_status', 'summary' => 'The website returned HTTP '.$status.' during the browser check. The report contains the recorded steps and available evidence.']);
 
@@ -468,6 +521,12 @@ class QaAgent
 
         $this->updateActive($run, ['report' => $report]);
         $this->repair($run, $journey['actions'], $snapshot, [], [], $journey['control']);
+    }
+
+    private function completeSectorCoverage(array $audit): bool
+    {
+        return collect($audit['sectors'])->contains('status', 'reviewed')
+            && collect($audit['sectors'])->every(static fn (array $sector): bool => in_array($sector['status'], ['disabled', 'reviewed'], true));
     }
 
     private function previewArtifact(array $state): ?string
@@ -570,7 +629,11 @@ class QaAgent
                 throw new RuntimeException('A proposed repair changed source that was not read in full. Select that file before repairing it.');
             }
         }
-        $this->updateActive($run, ['patch_files' => $files, 'report' => array_merge($run->report, ['diagnosis' => $patch['diagnosis'] ?? 'Proposed repair'])]);
+        $this->updateActive($run, ['patch_files' => $files, 'report' => array_merge($run->report, [
+            'diagnosis' => $patch['diagnosis'] ?? 'Proposed repair',
+            'patch_repository' => $project->repository_url,
+            'patch_added_test' => $test,
+        ])]);
         $this->step($run, 'diagnosis', $patch['diagnosis'] ?? 'A proposed patch and regression test are ready.', ['files' => array_keys($files)]);
         if ($project->repair_policy === 'suggest_only') {
             $this->finish($run, 'suggestion_ready', array_merge($run->report, ['summary' => 'The proposed repair is ready to review. No repository changes were published.']));

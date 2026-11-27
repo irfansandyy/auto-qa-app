@@ -1,0 +1,26 @@
+.qa-sector-options { min-inline-size: 0; padding: 0; border: 0; }
+.qa-sector-options legend { margin-bottom: 3px; color: var(--field-label); font-size: 13px; font-weight: 650; }
+.qa-sector-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 178px), 1fr)); gap: 9px; margin-top: 10px; }
+.qa-sector-option { display: flex; align-items: start; gap: 9px; min-height: 66px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+.qa-sector-option:has(input:checked) { background: var(--surface-soft); border-color: var(--control-border); }
+.qa-sector-option:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+.qa-sector-option input { appearance: auto; flex: 0 0 auto; margin-top: 3px; accent-color: var(--primary); }
+.qa-sector-option strong, .qa-sector-option small { display: block; }
+.qa-sector-option strong { color: var(--text); font-size: 13px; font-weight: 650; }
+.qa-sector-option small { margin-top: 2px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.qa-project-scope .field-hint { margin-bottom: 7px; }
+.qa-sector-chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.qa-sector-chips li { padding: 2px 7px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-soft); font-size: 12px; }
+.qa-sector-coverage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 218px), 1fr)); gap: 9px; margin-top: 10px; }
+.qa-sector-coverage-card { min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-soft); }
+.qa-sector-coverage-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: start; gap: 5px 8px; }
+.qa-sector-coverage-heading h4 { margin: 3px 0 0; color: var(--text); font-size: 13px; font-weight: 650; }
+.qa-sector-coverage-card p { margin: 6px 0 0; font-size: 12px; }
+.qa-sector-coverage-card dl { display: grid; gap: 4px; margin: 7px 0 0; font-size: 12px; }
+.qa-sector-coverage-card dl div { display: flex; flex-wrap: wrap; gap: 1px 7px; align-items: start; justify-content: space-between; }
+.qa-sector-coverage-card dt { color: var(--muted); }
+.qa-sector-coverage-card dd { margin: 0; color: var(--text); font-weight: 550; }
+.qa-unbound-note { margin-top: 8px; }
+.qa-finding-filters { display: flex; flex-wrap: wrap; gap: 9px; margin: 4px 0 12px; padding: 0; border: 0; }
+.qa-finding-filters .field { flex: 1 1 138px; min-width: 0; font-size: 12px; color: var(--field-label); }
+.qa-filtered-findings > .section-heading { margin-bottom: 6px; }

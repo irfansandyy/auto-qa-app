@@ -1,14 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { access, mkdir, writeFile } from 'node:fs/promises';
 import { resolve as resolvePath, join } from 'node:path';
-import { inspectHardening, measureViewport, narrowViewport, summarizeFrontEnd } from './frontend.mjs';
+import { inspectHardening, measurePerformance, measureViewport, narrowViewport, summarizeFrontEnd } from './frontend.mjs';
 import { PolicyError, assertSameOrigin, validateAction, redactUrl, readOnlyLink } from './policy.mjs';
 
 const actionTimeout = 12000;
 const maxLogs = 120;
 const maxPreviews = 26;
 const countedResources = new Set(['stylesheet', 'image', 'media', 'font', 'script', 'xhr', 'fetch', 'manifest']);
-const passiveActions = new Set(['navigate', 'assert_page', 'assert_text', 'assert_url', 'inspect_frontend', 'screenshot', 'finish']);
+const passiveActions = new Set(['navigate', 'assert_page', 'assert_text', 'assert_url', 'inspect_frontend', 'inspect_qa', 'screenshot', 'finish']);
 const passiveMethods = new Set(['GET', 'HEAD', 'OPTIONS']);
 const privateScreenshotStyle = [
   'input:not([type="submit"]):not([type="button"]):not([type="reset"]), select, textarea, [contenteditable] { color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; caret-color: transparent !important; }',
@@ -168,32 +168,41 @@ export class BrowserManager {
     }
   }
 
-  async inspectFrontend(session) {
+  async inspectFrontend(session, sectors = null) {
     const { page } = session;
     const pageUrl = page.url();
-    const desktopViewport = page.viewportSize();
+    const ui = sectors === null || sectors.includes('ui');
+    const ux = sectors === null || sectors.includes('ux');
+    const security = sectors === null || sectors.includes('security');
     await page.waitForLoadState('load', { timeout: 2000 }).catch(() => {});
-    const desktop = await measureViewport(page);
-    const hardening = await inspectHardening(session.documentResponse, pageUrl).catch(() => null);
+    const hardening = security ? await inspectHardening(session.documentResponse, pageUrl).catch(() => null) : null;
+    const performance = sectors?.includes('performance') ? await measurePerformance(page).catch(() => null) : null;
 
-    let mobile;
+    let frontend;
     let preview;
-    try {
-      await page.setViewportSize(narrowViewport);
-      mobile = await measureViewport(page);
-      if (page.url() !== pageUrl) throw new PolicyError('The page navigated during the responsive check.', 409);
-      preview = await this.preview(session);
-    } finally {
-      await page.setViewportSize(desktopViewport);
+    if (ui || ux) {
+      const desktopViewport = page.viewportSize();
+      const options = { ui, ux, extended: sectors !== null };
+      const desktop = await measureViewport(page, options);
+      let mobile;
+      try {
+        await page.setViewportSize(narrowViewport);
+        mobile = await measureViewport(page, options);
+        if (page.url() !== pageUrl) throw new PolicyError('The page navigated during the responsive check.', 409);
+        preview = await this.preview(session);
+      } finally {
+        await page.setViewportSize(desktopViewport);
+      }
+      frontend = summarizeFrontEnd(desktop, mobile);
+      if (ui && session.javascriptErrors > 0) frontend.findings.push({ code: 'javascript_error', count: session.javascriptErrors });
+      if (ui && session.failedResources > 0) frontend.findings.push({ code: 'failed_resource', count: session.failedResources });
     }
-    if (page.url() !== pageUrl) throw new PolicyError('The page navigated during the responsive check.', 409);
+    if (page.url() !== pageUrl) throw new PolicyError('The page navigated during the browser review.', 409);
 
-    const frontend = summarizeFrontEnd(desktop, mobile);
-    if (session.javascriptErrors > 0) frontend.findings.push({ code: 'javascript_error', count: session.javascriptErrors });
-    if (session.failedResources > 0) frontend.findings.push({ code: 'failed_resource', count: session.failedResources });
     return {
-      frontend,
+      ...(frontend ? { frontend } : {}),
       ...(hardening ? { hardening } : {}),
+      ...(performance ? { performance } : {}),
       ...(preview ? { preview_artifact: preview } : {}),
     };
   }
@@ -333,7 +342,7 @@ export class BrowserManager {
       await this.policy.check(session.page.url(), session.mode);
       const action = validateAction(input, session.refs);
       if (session.readOnly && !passiveActions.has(action.tool)) throw new PolicyError('This action is unavailable during a read-only check.');
-      if (!session.readOnly && ['assert_page', 'inspect_frontend'].includes(action.tool)) throw new PolicyError('Page checks require a read-only session.');
+      if (!session.readOnly && ['assert_page', 'inspect_frontend', 'inspect_qa'].includes(action.tool)) throw new PolicyError('Page checks require a read-only session.');
       const expectedPageUrl = action.tool === 'assert_page' && action.url !== undefined
         ? assertSameOrigin(action.url, session.origin).href
         : null;
@@ -364,8 +373,8 @@ export class BrowserManager {
         const expected = assertSameOrigin(action.url, session.origin);
         await session.page.waitForURL(expected.href, { timeout: 3000 }).catch(() => {});
         assertion = { type: 'url', expected: redactUrl(expected.href), passed: session.page.url() === expected.href };
-      } else if (action.tool === 'inspect_frontend') {
-        frontendInspection = await this.inspectFrontend(session);
+      } else if (['inspect_frontend', 'inspect_qa'].includes(action.tool)) {
+        frontendInspection = await this.inspectFrontend(session, action.sectors ?? null);
       } else if (action.tool === 'screenshot' || action.tool === 'finish') {
         artifact = session.readOnly ? await this.preview(session) : await this.screenshot(session);
       }

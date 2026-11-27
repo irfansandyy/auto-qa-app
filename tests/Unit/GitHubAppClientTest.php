@@ -375,6 +375,406 @@ class GitHubAppClientTest extends TestCase
         }
     }
 
+    public function test_workspace_browses_nested_directories_and_reads_text_at_an_immutable_ref(): void
+    {
+        $this->fakeApi($this->workspaceFileFixtures());
+        $client = new GitHubAppClient;
+
+        $root = $client->workspaceTree(self::REPOSITORY, self::BASE);
+        $folder = $client->workspaceTree(self::REPOSITORY, self::BASE, 'app');
+        $file = $client->readWorkspaceFile(self::REPOSITORY, self::BASE, 'app/Form Sample.php');
+
+        $this->assertFalse($root['truncated']);
+        $this->assertSame([['path' => 'app', 'name' => 'app', 'type' => 'dir', 'size' => null]], $root['entries']);
+        $this->assertSame(['app/Form Sample.php'], array_column($folder['entries'], 'path'));
+        $this->assertSame(['path' => 'app/Form Sample.php', 'content' => '<?php echo 1;', 'sha' => self::BLOB, 'editable' => true], $file);
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://api.github.com/repos/student/demo/git/blobs/'.self::BLOB
+            && $request->hasHeader('Authorization', 'Bearer installation-token'));
+    }
+
+    public function test_workspace_does_not_follow_symlinks_or_request_a_protected_path(): void
+    {
+        $this->fakeApi($this->workspaceFileFixtures());
+        $client = new GitHubAppClient;
+
+        try {
+            $client->readWorkspaceFile(self::REPOSITORY, self::BASE, 'app/settings-link');
+            $this->fail('Expected a symlink to be refused.');
+        } catch (InvalidArgumentException $exception) {
+            $this->assertStringContainsString('regular file', $exception->getMessage());
+        }
+
+        try {
+            $client->readWorkspaceFile(self::REPOSITORY, self::BASE, '.github/workflows/deploy.yml');
+            $this->fail('Expected the protected path to be refused.');
+        } catch (InvalidArgumentException $exception) {
+            $this->assertStringContainsString('protected', $exception->getMessage());
+        }
+        Http::assertNotSent(fn (Request $request) => str_contains($request->url(), '/git/blobs/') || str_contains($request->url(), 'deploy.yml'));
+    }
+
+    public function test_workspace_commits_to_a_nonprotected_branch_with_the_reviewed_blob_sha(): void
+    {
+        $this->fakeApi([
+            ...$this->workspaceFileFixtures(),
+            'GET /repos/student/demo/branches/release/update-form' => ['commit' => ['sha' => self::BASE], 'protected' => false],
+            'PUT /repos/student/demo/contents/app/Form Sample.php' => ['commit' => ['sha' => self::COMMIT], 'content' => ['sha' => self::NEW_TREE]],
+        ]);
+
+        $result = (new GitHubAppClient)->commitWorkspaceFile(self::REPOSITORY, 'release/update-form', 'app/Form Sample.php', self::BLOB, '<?php echo 2;', 'Update form');
+
+        $this->assertSame(['branch' => 'release/update-form', 'sha' => self::COMMIT, 'blob_sha' => self::NEW_TREE], $result);
+        Http::assertSent(fn (Request $request) => $request->method() === 'PUT' && $request->url() === 'https://api.github.com/repos/student/demo/contents/app/Form%20Sample.php'
+            && $request['branch'] === 'release/update-form' && $request['sha'] === self::BLOB
+            && $request['content'] === base64_encode('<?php echo 2;') && ! isset($request['author']));
+    }
+
+    #[DataProvider('workspaceCommitRefusals')]
+    public function test_workspace_refuses_unsafe_commits_before_the_write(string $branch, bool $protected, string $blob, string $error): void
+    {
+        $this->fakeApi([
+            ...$this->workspaceFileFixtures(),
+            "GET /repos/student/demo/branches/$branch" => ['commit' => ['sha' => self::BASE], 'protected' => $protected],
+        ]);
+
+        try {
+            (new GitHubAppClient)->commitWorkspaceFile(self::REPOSITORY, $branch, 'app/Form Sample.php', $blob, '<?php echo 2;', 'Update form');
+            $this->fail('Expected the unsafe commit to be refused.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString($error, $exception->getMessage());
+            Http::assertNotSent(fn (Request $request) => $request->method() === 'PUT');
+        }
+    }
+
+    public static function workspaceCommitRefusals(): array
+    {
+        return [
+            'default branch' => ['main', false, self::BLOB, 'non-protected branch'],
+            'protected branch' => ['release', true, self::BLOB, 'non-protected branch'],
+            'stale opened file' => ['release', false, self::NEW_TREE, 'file changed'],
+        ];
+    }
+
+    public function test_workspace_lists_branches_and_history_and_creates_a_branch_from_the_selected_source(): void
+    {
+        $this->fakeApi([
+            'GET /repos/student/demo/branches' => Http::response([['name' => 'release/current', 'commit' => ['sha' => self::BASE], 'protected' => true]], 200, ['Link' => '<https://api.github.com/repos/student/demo/branches?page=3>; rel="next"']),
+            'GET /repos/student/demo/commits' => [['sha' => self::BASE, 'commit' => ['message' => 'Release', 'author' => ['name' => 'Developer', 'date' => '2026-10-13T10:00:00Z']]]],
+            'GET /repos/student/demo/branches/release/current' => ['commit' => ['sha' => self::BASE], 'protected' => true],
+        ]);
+        $client = new GitHubAppClient;
+
+        $branches = $client->listBranches(self::REPOSITORY, 2);
+        $commits = $client->listWorkspaceCommits(self::REPOSITORY, 'release/current');
+        $branch = $client->createWorkspaceBranch(self::REPOSITORY, 'release/current', 'review/fix-form');
+
+        $this->assertSame(['items' => [['name' => 'release/current', 'sha' => self::BASE, 'protected' => true]], 'has_more' => true], $branches);
+        $this->assertSame(['items' => [['sha' => self::BASE, 'message' => 'Release', 'author' => 'Developer', 'authored_at' => '2026-10-13T10:00:00Z']], 'has_more' => false], $commits);
+        $this->assertSame(['name' => 'review/fix-form', 'sha' => self::BASE, 'protected' => false], $branch);
+        Http::assertSent(fn (Request $request) => str_contains($request->url(), '/branches?page=2&per_page=50'));
+        Http::assertSent(fn (Request $request) => $request->method() === 'POST' && str_ends_with($request->url(), '/git/refs')
+            && $request['ref'] === 'refs/heads/review/fix-form' && $request['sha'] === self::BASE);
+    }
+
+    public function test_workspace_presents_pull_request_changes_and_merges_the_exact_reviewed_head(): void
+    {
+        $patch = "@@ -1 +1 @@\n-old\n+new";
+        $pull = $this->workspacePullFixture();
+        $this->fakeApi([
+            'GET /repos/student/demo' => ['default_branch' => 'main', 'allow_merge_commit' => false, 'allow_squash_merge' => true],
+            'GET /repos/student/demo/pulls' => [$pull],
+            'GET /repos/student/demo/pulls/42' => $pull,
+            'GET /repos/student/demo/pulls/42/files' => [['filename' => 'app/Form.php', 'status' => 'modified', 'additions' => 1, 'deletions' => 1, 'patch' => $patch]],
+            'PUT /repos/student/demo/pulls/42/merge' => ['sha' => self::COMMIT, 'merged' => true],
+        ]);
+        $client = new GitHubAppClient;
+
+        $pulls = $client->listPullRequests(self::REPOSITORY);
+        $request = $client->getPullRequest(self::REPOSITORY, 42);
+        $diff = $client->listPullRequestFiles(self::REPOSITORY, 42);
+        $merge = $client->mergePullRequest(self::REPOSITORY, 42, self::BASE, 'main', self::TREE);
+
+        $this->assertSame('Fix form', $pulls['items'][0]['title']);
+        $this->assertSame(self::BASE, $request['head_sha']);
+        $this->assertSame(self::TREE, $request['base_sha']);
+        $this->assertFalse($diff['truncated']);
+        $this->assertSame($patch, $diff['files'][0]['patch']);
+        $this->assertSame(['sha' => self::COMMIT, 'merged' => true], $merge);
+        Http::assertSent(fn (Request $request) => $request->method() === 'PUT' && str_ends_with($request->url(), '/pulls/42/merge')
+            && $request['sha'] === self::BASE && $request['merge_method'] === 'squash');
+    }
+
+    public function test_workspace_omits_protected_patches_and_cannot_merge_an_incomplete_review(): void
+    {
+        $this->fakeApi([
+            'GET /repos/student/demo/pulls/42' => $this->workspacePullFixture(),
+            'GET /repos/student/demo/pulls/42/files' => [[
+                'filename' => '.env', 'status' => 'modified', 'additions' => 1, 'deletions' => 0, 'patch' => "+EXAMPLE='placeholder'",
+            ]],
+        ]);
+        $client = new GitHubAppClient;
+
+        $diff = $client->listPullRequestFiles(self::REPOSITORY, 42);
+        $this->assertTrue($diff['truncated']);
+        $this->assertNull($diff['files'][0]['patch']);
+
+        try {
+            $client->mergePullRequest(self::REPOSITORY, 42, self::BASE);
+            $this->fail('Expected the incomplete review to be refused.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('full diff is unavailable', $exception->getMessage());
+            Http::assertNotSent(fn (Request $request) => $request->method() === 'PUT');
+        }
+    }
+
+    public function test_workspace_creates_one_draft_for_the_selected_branches_and_reuses_it_on_retry(): void
+    {
+        $pull = [...$this->workspacePullFixture(), 'draft' => true, 'head' => ['ref' => 'review/fix-form']];
+        $lookups = 0;
+        $this->fakeApi([
+            'GET /repos/student/demo/pulls' => function () use (&$lookups, $pull): array {
+                return $lookups++ === 0 ? [] : [$pull];
+            },
+            'POST /repos/student/demo/pulls' => $pull,
+        ]);
+        $client = new GitHubAppClient;
+
+        $draft = $client->createWorkspacePullRequest(self::REPOSITORY, 'review/fix-form', 'main', 'Review form changes');
+        $retry = $client->createWorkspacePullRequest(self::REPOSITORY, 'review/fix-form', 'main', 'Review form changes');
+
+        $this->assertSame(['number' => 42, 'html_url' => self::REPOSITORY.'/pull/42'], $draft);
+        $this->assertSame($draft, $retry);
+        $creation = Http::recorded(fn (Request $request) => $request->method() === 'POST' && str_ends_with($request->url(), '/pulls'));
+        $this->assertCount(1, $creation);
+        [$request] = $creation->first();
+        $this->assertSame('review/fix-form', $request['head']);
+        $this->assertSame('main', $request['base']);
+        $this->assertTrue($request['draft']);
+    }
+
+    public function test_workspace_marks_the_reviewed_draft_ready_without_changing_its_head(): void
+    {
+        $this->fakeApi([
+            'GET /repos/student/demo/pulls/42' => [...$this->workspacePullFixture(), 'draft' => true],
+            'POST /graphql' => Http::response(['data' => ['markPullRequestReadyForReview' => ['pullRequest' => [
+                'id' => 'PR_example', 'headRefOid' => self::BASE, 'isDraft' => false,
+            ]]]]),
+        ]);
+
+        (new GitHubAppClient)->markPullRequestReady(self::REPOSITORY, 42, self::BASE);
+
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://api.github.com/graphql'
+            && $request['variables'] === ['id' => 'PR_example'] && $request->hasHeader('Authorization', 'Bearer installation-token'));
+    }
+
+    public function test_workspace_refuses_a_changed_pull_request_before_sending_any_mutation(): void
+    {
+        $this->fakeApi(['GET /repos/student/demo/pulls/42' => $this->workspacePullFixture()]);
+
+        try {
+            (new GitHubAppClient)->mergePullRequest(self::REPOSITORY, 42, self::COMMIT);
+            $this->fail('Expected the newer pull request head to require a new review.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('pull request changed on GitHub', $exception->getMessage());
+            Http::assertNotSent(fn (Request $request) => $request->method() === 'PUT');
+        }
+    }
+
+    #[DataProvider('workspaceMergeRefusals')]
+    public function test_workspace_refuses_to_merge_an_unreviewed_base_or_an_unknown_mergeability(bool $mergeable, string $branch, string $baseSha, string $error): void
+    {
+        $this->fakeApi(['GET /repos/student/demo/pulls/42' => [...$this->workspacePullFixture(), 'mergeable' => $mergeable ? true : null]]);
+
+        try {
+            (new GitHubAppClient)->mergePullRequest(self::REPOSITORY, 42, self::BASE, $branch, $baseSha);
+            $this->fail('Expected merge to require the reviewed base and confirmed mergeability.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString($error, $exception->getMessage());
+            Http::assertNotSent(fn (Request $request) => $request->method() === 'PUT');
+        }
+    }
+
+    public static function workspaceMergeRefusals(): array
+    {
+        return [
+            'retargeted branch' => [true, 'release', self::TREE, 'base changed'],
+            'updated base commit' => [true, 'main', self::COMMIT, 'base changed'],
+            'mergeability pending' => [false, 'main', self::TREE, 'still checking'],
+        ];
+    }
+
+    public function test_workspace_refuses_to_merge_if_github_reports_an_explicit_blocker(): void
+    {
+        $this->fakeApi(['GET /repos/student/demo/pulls/42' => [...$this->workspacePullFixture(), 'mergeable_state' => 'blocked']]);
+
+        try {
+            (new GitHubAppClient)->mergePullRequest(self::REPOSITORY, 42, self::BASE);
+            $this->fail('An explicitly blocked pull request cannot merge through Auto QA.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('GitHub reports a merge blocker', $exception->getMessage());
+            Http::assertNotSent(fn (Request $request) => $request->method() === 'PUT');
+        }
+    }
+
+    public function test_pull_request_quality_identifies_required_failed_and_missing_checks_on_the_reviewed_commit(): void
+    {
+        $this->fakeApi([
+            'GET /repos/student/demo/installation' => ['id' => 42, 'permissions' => [
+                'contents' => 'write', 'pull_requests' => 'write', 'metadata' => 'read', 'checks' => 'write', 'statuses' => 'write',
+            ]],
+            'POST /app/installations/42/access_tokens' => [
+                'token' => 'installation-token', 'expires_at' => gmdate('c', time() + 3600),
+                'permissions' => ['contents' => 'write', 'pull_requests' => 'write', 'checks' => 'read', 'statuses' => 'read'],
+            ],
+            'POST /graphql' => $this->pullQualityFixture(self::BASE, ['nodes' => [
+                ['name' => 'Unit tests', 'status' => 'COMPLETED', 'conclusion' => 'FAILURE', 'isRequired' => true],
+                ['name' => 'visual-regression', 'state' => 'SUCCESS', 'isRequired' => false],
+            ]]),
+            'GET /repos/student/demo/rules/branches/main' => [['type' => 'required_status_checks', 'parameters' => [
+                'required_status_checks' => [['context' => 'Unit tests'], ['context' => 'Lint']],
+            ]]],
+        ]);
+
+        $quality = (new GitHubAppClient)->pullRequestQuality(self::REPOSITORY, 42, self::BASE, 'main');
+
+        $this->assertSame(['review_required'], $quality['blockers']);
+        $this->assertSame([
+            ['name' => 'Lint', 'state' => 'missing', 'required' => true],
+            ['name' => 'Unit tests', 'state' => 'failed', 'required' => true],
+            ['name' => 'visual-regression', 'state' => 'passed', 'required' => false],
+        ], $quality['checks']);
+        $this->assertSame([['author' => 'reviewer', 'state' => 'approved', 'submitted_at' => '2026-11-26T12:00:00Z']], $quality['reviews']);
+        $this->assertSame([], $quality['unavailable']);
+        Http::assertSent(fn (Request $request) => str_ends_with($request->url(), '/access_tokens')
+            && $request['repositories'] === ['demo'] && $request['permissions']['checks'] === 'read' && $request['permissions']['statuses'] === 'read');
+        Http::assertSent(fn (Request $request) => str_ends_with($request->url(), '/graphql')
+            && $request['variables'] === ['owner' => 'student', 'name' => 'demo', 'number' => 42, 'contexts' => true, 'checks' => true, 'statuses' => true]);
+    }
+
+    public function test_missing_optional_check_permissions_do_not_mislabel_unavailable_checks_as_failed(): void
+    {
+        $this->fakeApi([
+            'POST /graphql' => $this->pullQualityFixture(self::BASE),
+            'GET /repos/student/demo/rules/branches/main' => [['type' => 'required_status_checks', 'parameters' => [
+                'required_status_checks' => [['context' => 'Unit tests']],
+            ]]],
+        ]);
+
+        $quality = (new GitHubAppClient)->pullRequestQuality(self::REPOSITORY, 42, self::BASE, 'main');
+
+        $this->assertSame(['checks', 'statuses'], $quality['unavailable']);
+        $this->assertSame([['name' => 'Unit tests', 'state' => 'unavailable', 'required' => true]], $quality['checks']);
+    }
+
+    public function test_quality_reports_that_the_reviewed_head_changed(): void
+    {
+        $this->fakeApi(['POST /graphql' => $this->pullQualityFixture(self::COMMIT)]);
+
+        $this->expectExceptionMessage('pull request changed on GitHub');
+
+        (new GitHubAppClient)->pullRequestQuality(self::REPOSITORY, 42, self::BASE, 'main');
+    }
+
+    public function test_inline_review_comments_are_written_on_the_visible_line_of_the_reviewed_head(): void
+    {
+        $this->fakeApi([
+            'GET /repos/student/demo/pulls/42' => $this->workspacePullFixture(),
+            'GET /repos/student/demo/pulls/42/files' => [$this->reviewDiffFixture()],
+            'POST /repos/student/demo/pulls/42/comments' => $this->reviewCommentFixture(),
+            'GET /repos/student/demo/pulls/42/comments' => [$this->reviewCommentFixture(), [...$this->reviewCommentFixture(), 'id' => 73, 'line' => null]],
+        ]);
+        $client = new GitHubAppClient;
+
+        $comment = $client->createPullRequestComment(self::REPOSITORY, 42, self::BASE, 'app/Form.php', 9, 'RIGHT', 'Use the existing helper.');
+        $comments = $client->listPullRequestComments(self::REPOSITORY, 42);
+
+        $this->assertSame($comment, $comments['comments'][0]);
+        $this->assertSame(['id' => 72, 'path' => 'app/Form.php', 'line' => 9, 'original_line' => 9, 'side' => 'RIGHT',
+            'body' => 'Use the existing helper.', 'author' => 'student-autoqa[bot]', 'created_at' => '2026-11-26T12:00:00Z',
+            'commit_sha' => self::BASE, 'outdated' => false], $comment);
+        $this->assertTrue($comments['comments'][1]['outdated']);
+        Http::assertSent(fn (Request $request) => $request->method() === 'POST' && str_ends_with($request->url(), '/pulls/42/comments')
+            && $request['commit_id'] === self::BASE && $request['line'] === 9 && $request['side'] === 'RIGHT' && $request['path'] === 'app/Form.php');
+    }
+
+    public function test_review_cannot_attach_a_comment_to_the_wrong_side_of_a_diff_line(): void
+    {
+        $this->fakeApi([
+            'GET /repos/student/demo/pulls/42' => $this->workspacePullFixture(),
+            'GET /repos/student/demo/pulls/42/files' => [$this->reviewDiffFixture()],
+        ]);
+
+        try {
+            (new GitHubAppClient)->createPullRequestComment(self::REPOSITORY, 42, self::BASE, 'app/Form.php', 9, 'LEFT', 'Review this line.');
+            $this->fail('The context line is a right-side anchor.');
+        } catch (InvalidArgumentException $exception) {
+            $this->assertStringContainsString('current pull request diff', $exception->getMessage());
+            Http::assertNotSent(fn (Request $request) => $request->method() === 'POST' && str_ends_with($request->url(), '/comments'));
+        }
+    }
+
+    public function test_workspace_file_search_prioritizes_file_names_and_excludes_ineligible_paths(): void
+    {
+        $this->fakeApi(['GET /repos/student/demo/git/trees/main' => ['truncated' => true, 'tree' => [
+            ['path' => 'app/Form.php', 'mode' => '100644'],
+            ['path' => 'Form/Controller.php', 'mode' => '100644'],
+            ['path' => 'app/FormLink', 'mode' => '120000'],
+            ['path' => 'Form/.env', 'mode' => '100644'],
+            ['path' => 'different/entry.php', 'mode' => '100644'],
+        ]]]);
+
+        $result = (new GitHubAppClient)->searchWorkspaceFiles(self::REPOSITORY, 'main', 'form');
+
+        $this->assertSame(['items' => [['path' => 'app/Form.php', 'name' => 'Form.php'],
+            ['path' => 'Form/Controller.php', 'name' => 'Controller.php']], 'truncated' => true], $result);
+        Http::assertSent(fn (Request $request) => str_contains($request->url(), '/git/trees/main?recursive=1'));
+    }
+
+    private function pullQualityFixture(string $head, ?array $contexts = null): array
+    {
+        return ['data' => ['repository' => ['pullRequest' => [
+            'headRefOid' => $head, 'baseRefName' => 'main', 'mergeStateStatus' => 'BLOCKED', 'reviewDecision' => 'REVIEW_REQUIRED',
+            'latestReviews' => ['nodes' => [['author' => ['login' => 'reviewer'], 'state' => 'APPROVED', 'submittedAt' => '2026-11-26T12:00:00Z']]],
+            'commits' => ['nodes' => [['commit' => ['oid' => $head, 'statusCheckRollup' => $contexts === null ? null : ['contexts' => $contexts]]]]],
+        ]]]];
+    }
+
+    private function reviewDiffFixture(): array
+    {
+        return ['filename' => 'app/Form.php', 'status' => 'modified', 'additions' => 1, 'deletions' => 1,
+            'patch' => "@@ -8,2 +8,2 @@\n-before\n+after\n context"];
+    }
+
+    private function reviewCommentFixture(): array
+    {
+        return ['id' => 72, 'path' => 'app/Form.php', 'line' => 9, 'original_line' => 9, 'side' => 'RIGHT',
+            'body' => 'Use the existing helper.', 'user' => ['login' => 'student-autoqa[bot]'], 'created_at' => '2026-11-26T12:00:00Z', 'commit_id' => self::BASE];
+    }
+
+    private function workspaceFileFixtures(): array
+    {
+        return [
+            'GET /repos/student/demo/git/trees/'.self::BASE => ['tree' => [
+                ['path' => '.env', 'mode' => '100644', 'type' => 'blob', 'size' => 30, 'sha' => self::BLOB],
+                ['path' => 'app', 'mode' => '040000', 'type' => 'tree', 'sha' => self::TREE],
+            ]],
+            'GET /repos/student/demo/git/trees/'.self::TREE => ['tree' => [
+                ['path' => 'Form Sample.php', 'mode' => '100644', 'type' => 'blob', 'size' => 13, 'sha' => self::BLOB],
+                ['path' => 'settings-link', 'mode' => '120000', 'type' => 'blob', 'size' => 7, 'sha' => self::BLOB],
+            ]],
+            'GET /repos/student/demo/git/blobs/'.self::BLOB => ['encoding' => 'base64', 'content' => base64_encode('<?php echo 1;')],
+        ];
+    }
+
+    private function workspacePullFixture(): array
+    {
+        return [
+            'number' => 42, 'html_url' => self::REPOSITORY.'/pull/42', 'node_id' => 'PR_example', 'title' => 'Fix form',
+            'state' => 'open', 'draft' => false, 'mergeable' => true, 'changed_files' => 1,
+            'head' => ['sha' => self::BASE, 'ref' => 'agent/fix-form'], 'base' => ['ref' => 'main', 'sha' => self::TREE],
+        ];
+    }
+
     private function fakeApi(array $overrides = []): void
     {
         $fixtures = [

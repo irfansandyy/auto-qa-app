@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\QaSectors;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -21,8 +22,14 @@ class QaRun extends Model
 
     protected function casts(): array
     {
-        return ['automatic' => 'boolean', 'advanced' => 'boolean', 'patch_files' => 'array', 'verification' => 'array', 'report' => 'array',
+        return ['automatic' => 'boolean', 'advanced' => 'boolean', 'patch_files' => 'array', 'verification' => 'array', 'report' => 'array', 'qa_sectors' => 'array',
             'started_at' => 'datetime', 'finished_at' => 'datetime'];
+    }
+
+    /** @return list<string> */
+    public function qaSectors(): array
+    {
+        return QaSectors::selected($this->qa_sectors);
     }
 
     public function project(): BelongsTo

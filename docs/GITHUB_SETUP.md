@@ -1,59 +1,86 @@
-# Connect a repository with a GitHub App
+# Configure the GitHub App server integration
 
-You do not need a separate committing account. Register a GitHub App under your existing account or an organization you manage. Every GitHub App has a built-in bot identity. Repair commits use the installation token without custom author, committer, or signature fields, allowing GitHub to attribute and verify the bot's commits. [GitHub bot signature verification](https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification#signature-verification-for-bots).
+This guide is for Auto QA developers and server operators. The website serves the repository installation and connection walkthrough at `/docs/github-app`.
 
-## Register and install the App
+## Register the App and set permissions
 
-1. Open GitHub **Settings**, then **Developer settings**, **GitHub Apps**, and **New GitHub App** under your account. For an organization, start in that organization's settings.
-2. Choose a unique App name. Set the homepage to your QA application URL or its repository URL. User authorization callbacks are unnecessary for this installation-only integration.
-3. Disable **Active** under Webhook for this prototype; it does not receive GitHub events yet.
-4. Set repository **Contents: Read and write** and **Pull requests: Read and write**. Metadata read access is automatic. Leave unrelated permissions unset.
-5. Keep installation restricted to your account for the initial demonstration and create the App.
-6. Record its numeric **App ID**. Open **Credentials**, then **Key pairs** and **New key**, and securely save the downloaded PEM key.
-7. Choose **Install App**, select your account, and select **Only select repositories**. Install it on the owned demonstration repository.
+1. In GitHub, open **Settings**, then **Developer settings**, then **GitHub Apps**. Select **New GitHub App** to register an app, or open **Edit** next to the app already configured for the server. For an organization-owned app, begin in that organization's settings.
+2. Enter a unique name and a homepage URL for your Auto QA deployment. For this installation-only setup, leave **Request user authorization (OAuth) during installation** clear, leave **Callback URL** and **Setup URL** blank, and clear **Active** in the **Webhook** section.
+3. In **Repository permissions**, set **Contents** and **Pull requests** to **Read and write** for a deployment that opens repair PRs. GitHub supplies read-only **Metadata**. For source review, Contents read access is enough. Keep unrelated permissions unset.
+4. Under **Where can this GitHub App be installed?**, choose **Any account** to let other GitHub accounts install the shared app, or **Only on this account** for an app restricted to its owning account. Save your changes. GitHub may ask existing installations to approve updated permissions. [App registration](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app) · [Public and private Apps](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/making-a-github-app-public-or-private) · [Changing App permissions](https://docs.github.com/en/apps/maintaining-github-apps/modifying-a-github-app-registration)
 
-GitHub documents the registration controls and key-generation procedure. [Registering a GitHub App](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app), [Managing private keys](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps).
+## Configure the key on the Azure VM
 
-## Configure this application
+Record the numeric **App ID** and the app slug that appears after `github.com/apps/`. For the shared deployment the slug is `pbkk-agentic-qa-bot`. In the App settings, open **Credentials**, then **Key pairs**, then **New key** to download the RSA PEM. Transfer it privately to the VM. Keep the key outside the Git checkout's tracked files and public web directory. [GitHub private key management](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps)
 
-Place the PEM key in a private server location outside the repository, public web directory, and repair runner. Give the application process read access. Set these environment values in the server's private configuration:
+From the VM's Auto QA checkout, install the PEM using the deployment's default secrets directory. Replace `/private/path/downloaded-app-key.pem` with the path where you stored the file on the VM.
 
-```dotenv
-GITHUB_APP_ID=your_numeric_app_id
-GITHUB_APP_PRIVATE_KEY_PATH=/absolute/private/path/autoqa-app.pem
-# Optional: pin one installation. The client otherwise discovers it from the repository.
-GITHUB_APP_INSTALLATION_ID=
-GITHUB_API_VERSION=2026-03-10
+```bash
+sudo install -d -m 0700 -o 1000 -g 1000 secrets
+sudo install -m 0400 -o 1000 -g 1000 /private/path/downloaded-app-key.pem secrets/github-app.pem
 ```
 
-Use the **App ID**, not the client ID. Keep the PEM and generated tokens out of commits, model prompts, reports, and worker mounts. After changing server environment values, refresh Laravel's configuration cache and restart any long-running queue workers.
+Compose mounts `./secrets` read-only at `/run/autoqa-secrets` in the app and QA queue containers. In the VM's private `.env`, use the numeric **App ID** shown by GitHub and use the container path for the PEM. Keep `GITHUB_APP_INSTALLATION_ID` empty for a shared app so Auto QA can discover each repository's installation.
 
-The server signs an RS256 App JWT, discovers the repository's installation, and obtains a short-lived installation token scoped to that repository and the Contents/Pull requests/Metadata permissions. Tokens expire after one hour; this client renews its in-memory token before expiry. No persistent personal access token is required. [JWT authentication](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app), [Installation access tokens](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app).
+```dotenv
+GITHUB_APP_ID=YOUR_NUMERIC_APP_ID
+GITHUB_APP_SLUG=pbkk-agentic-qa-bot
+GITHUB_APP_PRIVATE_KEY_PATH=/run/autoqa-secrets/github-app.pem
+GITHUB_APP_INSTALLATION_ID=
+```
 
-## Connect and verify
+## Grant repository access to the Auto QA account
 
-Supply a repository URL in the form `https://github.com/owner/repository` and a website URL. The repository must already contain a commit. Repository inspection resolves the default branch and its current commit and reports whether the installation has Contents write access. The tested deployment still needs to be bound to its actual source commit; the latest default-branch commit alone does not establish that correspondence.
+The server operator should confirm who can use each repository. To find an existing account's numeric ID from a private SSH session, replace `user@example.com` with its registered Auto QA email. The command displays only the ID or `null` if there is no match.
 
-Repair publication creates a new `agent/fix-*` branch. The client permits at most five text files and 64 KB of combined file content inside `app`, `resources`, `routes`, and `tests`. It excludes workflows, secret paths, symbolic-link traversal, and existing branch replacement. Draft PR creation reuses an existing open PR for the same branch on retry. The client does not merge PRs, force-push, or write the default branch. Repository rules may still block branch creation or commits.
+```bash
+docker compose exec -T -e XDG_CONFIG_HOME=/tmp -e XDG_DATA_HOME=/tmp app \
+  php artisan tinker --execute 'dump(\App\Models\User::query()->where("email", "user@example.com")->value("id"));'
+```
 
-Repository snapshots download under `storage/app/qa` for the isolated runner. Tokens stay in the GitHub client; authenticated API requests never follow redirects. Snapshot downloads allow only the expected GitHub codeload host and omit the installation token there. Extract and execute source only in the isolated runner, with no App key or orchestrator credentials available.
+In the same `.env`, add the repository under that account ID. This example authorizes one repository for account `7`. Use the actual numeric Auto QA account ID, keep existing grants, and use an array for each account's repositories.
 
-Before publishing a verified PR, the run must show the failure on the original source, a regression test failing before and passing after the patch, relevant checks passing, and the patched browser replay passing. This API client supplies GitHub operations; the run workflow owns those verification gates.
+```dotenv
+AUTOQA_REPOSITORY_ACCESS='{"7":["owner/target-repo"]}'
+```
 
-## What localhost means
+For operators who should create branches, commit files, open drafts, or merge in Auto QA, grant both repository access and explicit workspace write access to the same account and repository. Leave this setting empty for read-only workspace accounts. Use Contents and Pull requests read/write on the GitHub App and approve any updated permissions on the installation. [Change GitHub App permissions](https://docs.github.com/en/apps/maintaining-github-apps/modifying-a-github-app-registration#changing-the-permissions-of-a-github-app)
 
-- A website on the QA server can be reached through an administrator-approved local origin and port.
-- In containers, `localhost` refers to that container. Use an explicitly configured internal service address or host route.
-- A cloud QA server cannot reach a website on your laptop through your laptop's `localhost`. Use a tunnel to that application or deploy a staging copy. A website tunnel grants HTTP access; it does not grant desktop or filesystem access.
+Enable optional Checks and Commit statuses read permissions to show GitHub CI details on the pull request review screen. The app requests these permissions as read-only when it creates a repository-scoped token. [GitHub status checks](https://docs.github.com/en/pull-requests/reference/status-checks)
+
+```dotenv
+AUTOQA_REPOSITORY_WRITE_ACCESS='{"7":["owner/target-repo"]}'
+```
+
+Apply the configuration and verify that the app can read the key.
+
+```bash
+docker compose up -d --wait
+docker compose exec app sh -c 'test -r /run/autoqa-secrets/github-app.pem && echo "PEM is readable"'
+```
+
+For a host deployment outside Docker, set `GITHUB_APP_PRIVATE_KEY_PATH` to a private absolute path readable by the app and queue processes. Refresh cached Laravel configuration if used, then restart the queue workers.
+
+Auto QA signs an App JWT and requests a short-lived installation token scoped to the selected repository and applicable Contents, Pull requests, and Metadata permissions. The installation token supplies the bot identity for supported GitHub operations. Keep the PEM and installation tokens out of commits, reports, model prompts, and worker mounts. [Installation token scope](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app) · [GitHub bot commit verification](https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification#signature-verification-for-bots)
+
+## Verified repair and draft pull requests
+
+The standard Azure Compose stack supports repository review and repair suggestions. Verified draft PRs require a separately configured isolated repair runner. Publication requires a passing baseline suite, a regression assertion that fails on the baseline, a passing patched regression and patched suite, a successful replay of the original browser scenario, and a separate successful browser control. The published change uses a dedicated `agent/fix-*` branch and a draft PR for a person to review and merge. GitHub repository rules can still block publication. [Isolated repair runner](REPAIR_RUNNER.md)
+
+The GitHub client supports at most five text files and 64 KB of combined changes in `app`, `resources`, `routes`, and `tests`. It protects workflow and secret paths, checks for symlinks, and refuses to replace an existing branch. Draft PR creation reuses an existing open PR for the same branch on retry. Repository snapshots go to `storage/app/qa` for isolated verification. The download client restricts the archive redirect to GitHub's expected archive host and keeps the installation token with the API request.
 
 ## Troubleshooting
 
-- **Missing configuration:** set both `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH`.
-- **HTTP 401:** check the App ID, RSA PEM key, and server clock.
-- **HTTP 403:** check Contents/Pull requests permission, installation approval, repository rules, and rate limits.
-- **HTTP 404:** verify the URL and that the App is installed on that selected repository.
-- **Installation mismatch:** clear or correct `GITHUB_APP_INSTALLATION_ID` when switching installations.
-- **Existing fix branch:** resume the recorded result or choose a new run branch; the client will never overwrite it.
-- **Empty repository:** create the initial commit first.
+| What you see | What to check |
+| --- | --- |
+| **Install on GitHub** is missing | Set `GITHUB_APP_SLUG` and recreate the Compose services. |
+| **Setup needed** under **GitHub App** | Set the numeric App ID and configure the server-side PEM path. Check that the file exists and is readable inside the app container. |
+| Auto QA denies repository access | Verify the account's numeric Auto QA ID and the exact `owner/repository` grant. Apply the `.env` changes, then run **Check connection** again. |
+| GitHub HTTP 401 | Check the numeric App ID, RSA key, and server clock. |
+| GitHub HTTP 403 or read-only access | Check whether the installation owner approved the updated permissions. For writes, check Contents and Pull requests access, repository rules, and GitHub rate limits. |
+| GitHub HTTP 404 or empty repository | Use the repository's root URL and confirm the installation includes it. Add an initial commit if the repository is empty. |
+| Installation mismatch | Clear `GITHUB_APP_INSTALLATION_ID` for shared installations, or use the intended installation ID for a dedicated installation. |
+| The target website is on localhost | Use an explicitly administrator-approved origin that the browser worker can reach. On Azure, use a reachable staging URL for a site hosted on your laptop. |
+| A fix branch already exists | Review the recorded result or start a new run for a new repair branch. |
 
-App registration, installation, and private-key placement require the actual GitHub account and server configuration. Regular automated tests use fake GitHub responses. The explicitly enabled connection test reads the selected demonstration repository with the configured App. Tests make no external commits or PRs.
+The optional real GitHub connection test reads the configured demonstration repository. Regular tests use fake responses, and the connection test performs no commits or pull requests.

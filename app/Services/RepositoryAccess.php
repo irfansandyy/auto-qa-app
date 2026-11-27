@@ -11,7 +11,32 @@ class RepositoryAccess
 {
     public function assertAllowed(User $user, string $url): void
     {
-        $grants = config('repository-access.grants', []);
+        if (! $this->canView($user, $url)) {
+            throw new AuthorizationException(__('repository-access.denied'));
+        }
+    }
+
+    public function canView(User $user, string $url): bool
+    {
+        return $this->hasGrant($user, $url, 'repository-access.grants');
+    }
+
+    public function canWrite(User $user, string $url): bool
+    {
+        return $this->canView($user, $url)
+            && $this->hasGrant($user, $url, 'repository-access.write_grants');
+    }
+
+    public function assertCanWrite(User $user, string $url): void
+    {
+        if (! $this->canWrite($user, $url)) {
+            throw new AuthorizationException(__('repository-access.write_denied'));
+        }
+    }
+
+    private function hasGrant(User $user, string $url, string $configKey): bool
+    {
+        $grants = config($configKey, []);
         $repositories = $user->exists && is_array($grants) && ! array_is_list($grants) ? ($grants[$user->getKey()] ?? []) : [];
         if (is_array($repositories) && array_is_list($repositories)) {
             try {
@@ -26,13 +51,13 @@ class RepositoryAccess
                         continue;
                     }
                     if ($requested === $allowed) {
-                        return;
+                        return true;
                     }
                 }
             } catch (InvalidArgumentException) {
             }
         }
 
-        throw new AuthorizationException(__('repository-access.denied'));
+        return false;
     }
 }

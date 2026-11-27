@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\QaSectors;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -15,7 +16,13 @@ class Project extends Model
 
     protected function casts(): array
     {
-        return ['connection' => 'array'];
+        return ['connection' => 'array', 'qa_sectors' => 'array'];
+    }
+
+    /** @return list<string> */
+    public function qaSectors(): array
+    {
+        return QaSectors::selected($this->qa_sectors);
     }
 
     public function user(): BelongsTo

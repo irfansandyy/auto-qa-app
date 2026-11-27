@@ -31,7 +31,7 @@ class ModelSettingsTest extends TestCase
 
     public function test_saves_only_current_user_settings_encrypts_key_and_never_renders_it(): void
     {
-        $user = User::factory()->create();
+        $user = User::factory()->create(['theme' => 'light']);
         $other = User::factory()->create();
         $originalName = $user->name;
 

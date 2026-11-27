@@ -17,10 +17,10 @@ class ApplyUiPreferences
     public function handle(Request $request, Closure $next): Response
     {
         $locale = $request->user()?->locale ?? $request->cookie('autoqa_locale', 'en');
-        $theme = $request->user()?->theme ?? $request->cookie('autoqa_theme', 'light');
+        $theme = $request->user()?->theme ?? $request->cookie('autoqa_theme', 'dark');
 
         app()->setLocale(in_array($locale, ['en', 'id'], true) ? $locale : 'en');
-        View::share('theme', in_array($theme, ['light', 'dark'], true) ? $theme : 'light');
+        View::share('theme', in_array($theme, ['light', 'dark'], true) ? $theme : 'dark');
 
         return $next($request);
     }

@@ -77,14 +77,18 @@ class RepairSandboxTest extends TestCase
         $this->fakePreviewHealth();
         $run = $this->runModel();
         $run->automatic = true;
-        $run->report = ['control_actions' => [['tool' => 'assert_page', 'url' => 'https://example.com/register']]];
+        $run->report = [
+            'control_actions' => [['tool' => 'assert_page', 'url' => 'https://example.com/register']],
+            'failure' => ['artifact' => 'browser-before-preview.png'],
+        ];
         $loaded = ['snapshot' => ['document_status' => 200], 'network_errors' => [['blocked' => true]]];
         $assertion = [...$loaded, 'assertion' => ['passed' => true]];
         $browser = Mockery::mock(BrowserWorker::class);
         $browser->shouldReceive('start')->with('http://127.0.0.1:8081/register', 'local', true)->twice()->andReturn(
             [...$loaded, 'session_id' => 'original'], [...$loaded, 'session_id' => 'control']);
         $browser->shouldReceive('act')->with('original', ['tool' => 'navigate', 'url' => 'http://127.0.0.1:8081/help'])->once()->andReturn($loaded);
-        $browser->shouldReceive('act')->with('original', ['tool' => 'assert_page', 'url' => 'http://127.0.0.1:8081/help'])->once()->andReturn($assertion);
+        $browser->shouldReceive('act')->with('original', ['tool' => 'assert_page', 'url' => 'http://127.0.0.1:8081/help'])->once()
+            ->andReturn([...$assertion, 'preview_artifact' => 'browser-after-preview.png']);
         $browser->shouldReceive('act')->with('control', ['tool' => 'assert_page', 'url' => 'http://127.0.0.1:8081/register'])->once()->andReturn($assertion);
         $browser->shouldReceive('close')->with('original')->once()->andReturn([]);
         $browser->shouldReceive('close')->with('control')->once()->andReturn([]);
@@ -98,6 +102,7 @@ class RepairSandboxTest extends TestCase
         $this->assertTrue($result['passed'], $result['message']);
         $this->assertSame(1, $result['checks']['original_replay']['assertions']);
         $this->assertSame(1, $result['checks']['control_replay']['assertions']);
+        $this->assertSame(['before' => 'browser-before-preview.png', 'after' => 'browser-after-preview.png'], $result['visual_comparison']);
     }
 
     public function test_automatic_verification_requires_an_exact_url_and_a_different_control_page(): void

@@ -3,9 +3,12 @@
 namespace App\Services;
 
 use App\Models\User;
+use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Contracts\Encryption\Encrypter;
+use Illuminate\Contracts\Session\Session;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Str;
 use RuntimeException;
 use SensitiveParameter;
@@ -14,9 +17,20 @@ class PasswordResetCodes
 {
     public const EXPIRY_MINUTES = 10;
 
+    public const SESSION_KEY = 'password_reset_challenge';
+
     private const MAX_ATTEMPTS = 5;
 
     public function __construct(private Encrypter $encrypter) {}
+
+    /** @return array{email: string, id: string, expires_at: int}|null */
+    public static function pendingChallenge(Session $session): ?array
+    {
+        $challenge = $session->get(self::SESSION_KEY);
+
+        return is_array($challenge) && is_string($challenge['email'] ?? null) && is_string($challenge['id'] ?? null)
+            && is_int($challenge['expires_at'] ?? null) && $challenge['expires_at'] > now()->timestamp ? $challenge : null;
+    }
 
     public function issue(string $email, string $requestId): ?string
     {
@@ -45,10 +59,10 @@ class PasswordResetCodes
 
     public function consume(string $email, string $requestId, #[SensitiveParameter] string $code, #[SensitiveParameter] string $password): bool
     {
-        return DB::transaction(function () use ($email, $requestId, $code, $password): bool {
+        $resetAccount = DB::transaction(function () use ($email, $requestId, $code, $password): ?User {
             $user = User::query()->where('email', $email)->lockForUpdate()->first();
             if ($user === null) {
-                return false;
+                return null;
             }
 
             $challenge = DB::table('password_reset_codes')
@@ -56,7 +70,7 @@ class PasswordResetCodes
                 ->where('expires_at', '>', now())->whereNotNull('code_digest');
             $reset = $challenge->first(['attempts', 'code_digest']);
             if ($reset === null) {
-                return false;
+                return null;
             }
 
             if (! hash_equals($reset->code_digest, $this->digest($email, $requestId, $code))) {
@@ -66,14 +80,24 @@ class PasswordResetCodes
                     'code_digest' => $attempts >= self::MAX_ATTEMPTS ? null : $reset->code_digest,
                 ]);
 
-                return false;
+                return null;
             }
 
             if ($challenge->update(['code_digest' => null]) !== 1) {
-                return false;
+                return null;
             }
-            if (! $user->forceFill(['password' => Hash::make($password), 'remember_token' => Str::random(60)])->save()) {
-                throw new RuntimeException('Unable to update the account password.');
+            $broker = Password::broker();
+            $status = $broker->reset([
+                'email' => $user->email,
+                'token' => $broker->createToken($user),
+                'password' => $password,
+            ], function (User $account, #[SensitiveParameter] string $replacement): void {
+                if (! $account->forceFill(['password' => Hash::make($replacement), 'remember_token' => Str::random(60)])->save()) {
+                    throw new RuntimeException('Unable to update the account password.');
+                }
+            });
+            if ($status !== Password::PASSWORD_RESET) {
+                throw new RuntimeException('The password broker could not complete the reset.');
             }
 
             if (config('session.driver') === 'database') {
@@ -81,8 +105,16 @@ class PasswordResetCodes
                     ->where('user_id', $user->getKey())->delete();
             }
 
-            return true;
+            return $user->refresh();
         }, attempts: 3);
+
+        if ($resetAccount === null) {
+            return false;
+        }
+
+        event(new PasswordReset($resetAccount));
+
+        return true;
     }
 
     public function invalidate(string $email, string $requestId): void

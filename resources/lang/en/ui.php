@@ -17,6 +17,8 @@ return [
     'credentials_configured' => 'Credentials configured',
     'setup_needed' => 'Setup needed',
     'github_app' => 'GitHub App',
+    'help' => 'Help',
+    'github_app_guide' => 'GitHub App guide',
     'github_identity_description' => 'The app provides an identity for repair commits. A separate bot account is not required.',
     'install_on_github' => 'Install on GitHub',
     'github_name_hint' => 'Set your GitHub App name to enable installation.',

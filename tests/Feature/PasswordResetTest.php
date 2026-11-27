@@ -5,7 +5,9 @@ namespace Tests\Feature;
 use App\Jobs\SendPasswordResetCode;
 use App\Mail\PasswordResetCode;
 use App\Models\User;
+use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
@@ -41,6 +43,7 @@ class PasswordResetTest extends TestCase
     public function test_an_emailed_code_resets_only_the_account_bound_to_the_session_and_accepts_eight_characters(): void
     {
         Mail::fake();
+        Event::fake([PasswordReset::class]);
         $operator = User::factory()->create(['email' => 'owner@example.test']);
         $other = User::factory()->create();
 
@@ -59,6 +62,8 @@ class PasswordResetTest extends TestCase
 
         $this->assertTrue(Hash::check('sunrise8', $operator->fresh()->password));
         $this->assertSame($other->password, $other->fresh()->password);
+        Event::assertDispatched(PasswordReset::class, fn (PasswordReset $event): bool => $event->user->is($operator));
+        $this->assertDatabaseMissing('password_reset_tokens', ['email' => $operator->email]);
         $this->assertGuest();
     }
 

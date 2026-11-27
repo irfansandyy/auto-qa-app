@@ -104,10 +104,15 @@ export function assertSameOrigin(value, origin) {
 
 export function validateAction(action, refs = new Set()) {
   if (!action || typeof action !== 'object' || Array.isArray(action)) throw new PolicyError('A browser action object is required.');
-  const tools = ['click', 'fill', 'select', 'press', 'navigate', 'assert_text', 'assert_url', 'assert_page', 'inspect_frontend', 'screenshot', 'finish'];
+  const tools = ['click', 'fill', 'select', 'press', 'navigate', 'assert_text', 'assert_url', 'assert_page', 'inspect_frontend', 'inspect_qa', 'screenshot', 'finish'];
   if (!tools.includes(action.tool)) throw new PolicyError(`Unknown browser tool. Allowed tools: ${tools.join(', ')}.`);
   if (action.tool === 'inspect_frontend' && Object.keys(action).length !== 1) {
     throw new PolicyError('The front-end check only accepts its tool name.');
+  }
+  if (action.tool === 'inspect_qa' && (Object.keys(action).length !== 2 || !Array.isArray(action.sectors)
+    || action.sectors.length === 0 || action.sectors.length > 4 || new Set(action.sectors).size !== action.sectors.length
+    || !action.sectors.every((sector) => ['ui', 'ux', 'performance', 'security'].includes(sector)))) {
+    throw new PolicyError('The passive review only accepts selected browser sectors.');
   }
   if (['click', 'fill', 'select'].includes(action.tool) || (action.tool === 'press' && action.id !== undefined)) {
     if (typeof action.id !== 'string' || !refs.has(action.id)) throw new PolicyError('The element reference is missing or stale. Read a fresh snapshot.');

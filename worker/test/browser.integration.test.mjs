@@ -229,10 +229,11 @@ test('read-only front-end review measures a narrow viewport and observes layout,
       'set-cookie': 'localfixture=sample; Path=/',
     });
     response.end(`<!doctype html>
-      <style>body{margin:0}.wide-panel{width:700px}@media(max-width:600px){.desktop-only{display:none}}</style>
+      <style>body{margin:0}.wide-panel{width:700px}.faint{background:#fff;color:#aaa}@media(max-width:600px){.desktop-only{display:none}}</style>
       <main class="wide-panel"><h1>Owned check page</h1><a class="desktop-only" href="/next">Desktop link</a>
       <img src="/broken.png" width="30" height="20"><img src="/redirected.png" alt="" width="30" height="20">
-      <label for="labelled">Name</label><input id="labelled"><input type="email"><input hidden></main>
+      <label for="labelled">Name</label><input id="labelled"><input type="email"><input hidden>
+      <input placeholder="Placeholder only"><p class="faint">Low contrast fixture</p></main>
       <script>console.error('Fixture console error'); throw new Error('Fixture runtime error');</script>`);
   });
   let manager;
@@ -264,6 +265,13 @@ test('read-only front-end review measures a narrow viewport and observes layout,
     assert.ok(result.snapshot.elements.some((element) => element.text === 'Desktop link'), 'The restored desktop snapshot keeps links for the next action.');
     const preview = await readFile(join(evidenceDir, result.preview_artifact));
     assert.deepEqual([preview.readUInt32BE(16), preview.readUInt32BE(20)], [390, 844]);
+
+    const focused = await manager.act(started.session_id, { tool: 'inspect_qa', sectors: ['ux', 'performance'] });
+    assert.equal(focused.hardening, undefined);
+    assert.ok(focused.performance.resource_count >= 0);
+    assert.ok(focused.frontend.findings.some(({ code }) => code === 'placeholder_only_controls'));
+    assert.ok(focused.frontend.findings.some(({ code }) => code === 'low_contrast_sample'));
+    assert.ok(focused.frontend.findings.every(({ code }) => code !== 'horizontal_overflow' && code !== 'javascript_error'));
 
     await manager.act(started.session_id, { tool: 'navigate', url: `${origin}/next` });
     const next = await manager.act(started.session_id, { tool: 'inspect_frontend' });

@@ -17,6 +17,8 @@ return [
     'credentials_configured' => 'Kredensial sudah diatur',
     'setup_needed' => 'Perlu pengaturan',
     'github_app' => 'GitHub App',
+    'help' => 'Bantuan',
+    'github_app_guide' => 'Panduan GitHub App',
     'github_identity_description' => 'Aplikasi menyediakan identitas untuk commit perbaikan. Anda tidak perlu akun bot terpisah.',
     'install_on_github' => 'Pasang di GitHub',
     'github_name_hint' => 'Atur nama GitHub App agar aplikasi dapat dipasang.',
