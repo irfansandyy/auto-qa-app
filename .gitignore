@@ -6,6 +6,9 @@
 .env.backup
 .env.production
 ..env*.sw?
+.*.autoqa-sync.lock
+.*.autoqa-sync-*.tmp
+/deploy/__pycache__/
 .editorconfig
 .phpactor.json
 .phpunit.result.cache

@@ -3,6 +3,8 @@
 return [
     'app_id' => env('GITHUB_APP_ID'),
     'app_slug' => env('GITHUB_APP_SLUG'),
+    'client_id' => env('GITHUB_APP_CLIENT_ID'),
+    'client_secret' => env('GITHUB_APP_CLIENT_SECRET'),
     'private_key_path' => env('GITHUB_APP_PRIVATE_KEY_PATH'),
     // Optional: pin the expected installation. Otherwise discover it from the repository.
     'installation_id' => env('GITHUB_APP_INSTALLATION_ID'),

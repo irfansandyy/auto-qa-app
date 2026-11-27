@@ -15,7 +15,7 @@ class QaSectors
     /** @return list<string> */
     public static function selected(?array $sectors): array
     {
-        return $sectors === null ? self::ALL : array_values(array_intersect(self::ALL, $sectors));
+        return $sectors === null ? self::ALL : array_values(array_intersect(QaRuleCatalog::SECTORS, array_filter($sectors, 'is_string')));
     }
 
     /** @param list<string> $sectors */

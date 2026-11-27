@@ -76,6 +76,12 @@
                     <section class="docs-section" id="approve" aria-labelledby="docs-approval-title">
                         <h2 id="docs-approval-title">{{ __('github-docs.approval_heading') }}</h2>
                         <p>{{ __('github-docs.approval_text') }}</p>
+                        @auth
+                            <div class="docs-actions">
+                                <a class="button button-secondary" href="{{ route('dashboard', ['panel' => 'settings']) }}#github-connection">{{ __('dashboard-panels.github.account_settings') }}</a>
+                            </div>
+                        @endauth
+                        <p class="docs-callout">{{ __('github-docs.manual_approval') }}</p>
                         <ul class="docs-approval-details">
                             <li>{{ __('github-docs.approval_account') }}</li>
                             <li>{{ __('github-docs.approval_repository') }} <code>owner/repository</code></li>
@@ -136,8 +142,16 @@
                         </ol>
                         <p class="docs-callout">{{ __('github-docs.permissions_review_identity') }}</p>
                         <p>{{ __('github-docs.permissions_check_details') }}</p>
+                        <h3 class="docs-reference">{{ __('github-docs.oauth_heading') }}</h3>
+                        <p>{{ __('github-docs.oauth_callback') }} <code>{{ rtrim((string) config('app.url'), '/').route('settings.github.callback', absolute: false) }}</code></p>
+                        <p>{{ __('github-docs.oauth_manual_connect') }}</p>
+                        <p>{{ __('github-docs.oauth_credentials') }} <code>GITHUB_APP_CLIENT_ID</code> {{ __('github-docs.oauth_and') }} <code>GITHUB_APP_CLIENT_SECRET</code>.</p>
+                        <p>{{ __('github-docs.oauth_deploy') }}</p>
                         <p class="docs-reference">
                             <a href="https://docs.github.com/en/apps/maintaining-github-apps/modifying-a-github-app-registration#changing-the-permissions-of-a-github-app">{{ __('github-docs.permissions_reference') }}</a>
+                        </p>
+                        <p class="docs-reference">
+                            <a href="https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-user-authorization-callback-url">{{ __('github-docs.oauth_reference') }}</a>
                         </p>
                     </section>
 

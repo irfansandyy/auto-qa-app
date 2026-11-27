@@ -52,18 +52,32 @@ class GitHubAppClient
             throw new RuntimeException('This repository has no default branch. Add an initial commit before connecting it.');
         }
 
-        $head = $this->request('GET', $this->repoPath($repository).'/git/ref/heads/'.rawurlencode($branch), $access['token'])->json('object.sha');
-        $this->assertSha($head);
-
         return [
             ...$repository,
             'default_branch' => $branch,
-            'head_sha' => $head,
+            'head_sha' => $this->branchHeadSha($repository, $branch, $access['token']),
             'installation_id' => $access['installation_id'],
             'can_push' => ($access['permissions']['contents'] ?? null) === 'write'
                 && ! ($data['archived'] ?? false)
                 && ! ($data['disabled'] ?? false),
         ];
+    }
+
+    public function branchHead(string $repositoryUrl, string $branch): string
+    {
+        $this->assertRef($branch);
+        $repository = RepositoryUrl::parse($repositoryUrl);
+        $access = $this->installationAccess($repository);
+
+        return $this->branchHeadSha($repository, $branch, $access['token']);
+    }
+
+    private function branchHeadSha(array $repository, string $branch, string $token): string
+    {
+        $head = $this->request('GET', $this->repoPath($repository).'/git/ref/heads/'.rawurlencode($branch), $token)->json('object.sha');
+        $this->assertSha($head);
+
+        return strtolower($head);
     }
 
     /** @return array{items: list<array{name: string, sha: string, protected: bool}>, has_more: bool} */
@@ -1288,15 +1302,8 @@ class GitHubAppClient
         }
 
         $jwt = $this->jwt();
-        $installation = $this->request('GET', $this->repoPath($repository).'/installation', $jwt)->json();
-        $id = $installation['id'] ?? null;
-        if (! is_numeric($id) || (int) $id <= 0 || ! empty($installation['suspended_at'])) {
-            throw new RuntimeException('Install and enable the configured GitHub App on the selected repository.');
-        }
-        $configured = config('github.installation_id');
-        if ($configured && (int) $configured !== (int) $id) {
-            throw new RuntimeException('The repository belongs to a different GitHub App installation. Check GITHUB_APP_INSTALLATION_ID.');
-        }
+        $installation = $this->repositoryInstallation($repository, $jwt);
+        $id = (int) $installation['id'];
 
         $permissions = array_intersect_key($installation['permissions'] ?? [], array_flip(['contents', 'pull_requests', 'metadata']));
         foreach (['checks', 'statuses'] as $permission) {
@@ -1322,6 +1329,26 @@ class GitHubAppClient
             'token' => $data['token'], 'installation_id' => (int) $id,
             'permissions' => $data['permissions'] ?? [], 'expires_at' => $expires,
         ];
+    }
+
+    public function installationIdForRepository(string $repositoryUrl): int
+    {
+        return (int) $this->repositoryInstallation(RepositoryUrl::parse($repositoryUrl), $this->jwt())['id'];
+    }
+
+    private function repositoryInstallation(array $repository, string $jwt): array
+    {
+        $installation = $this->request('GET', $this->repoPath($repository).'/installation', $jwt)->json();
+        $id = $installation['id'] ?? null;
+        if (! is_numeric($id) || (int) $id <= 0 || ! empty($installation['suspended_at'])) {
+            throw new RuntimeException('Install and enable the configured GitHub App on the selected repository.');
+        }
+        $configured = config('github.installation_id');
+        if ($configured && (int) $configured !== (int) $id) {
+            throw new RuntimeException('The repository belongs to a different GitHub App installation. Check GITHUB_APP_INSTALLATION_ID.');
+        }
+
+        return $installation;
     }
 
     private function jwt(): string

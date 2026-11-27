@@ -241,14 +241,17 @@ class RepositoryWorkspaceTest extends TestCase
 
         Livewire::actingAs($project->user)->test(Dashboard::class)
             ->call('switchProject', $project->id)
+            ->set('runSectors', ['api'])
             ->call('generateRunGuidance')
-            ->assertSet('runGuidance', __('workspace.guidance_site')."\n\n".__('workspace.guidance_code'))
+            ->assertSet('runGuidance', fn (string $guidance): bool => str_contains($guidance, __('workspace.guidance_code'))
+                && str_contains($guidance, 'api.') && ! str_contains($guidance, 'security.') && mb_strlen($guidance) <= 1000)
             ->set('runGuidance', 'Check the optional phone number.')
             ->call('generateRunGuidance')
             ->assertSet('runGuidance', 'Check the optional phone number.')
             ->call('switchProject', $siteOnly->id)
             ->call('generateRunGuidance')
-            ->assertSet('runGuidance', __('workspace.guidance_site'));
+            ->assertSet('runGuidance', fn (string $guidance): bool => str_contains($guidance, __('workspace.guidance_site'))
+                && ! str_contains($guidance, __('workspace.guidance_code')));
     }
 
     private function projectWithGrant(bool $write = true): Project

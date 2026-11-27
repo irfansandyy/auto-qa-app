@@ -9,6 +9,7 @@ use App\Services\BrowserWorker;
 use App\Services\GitHub\GitHubAppClient;
 use App\Services\GitHub\RepositoryUrl;
 use App\Services\ModelClient;
+use App\Services\QaRuleCatalog;
 use App\Services\QaSectors;
 use App\Services\RepositoryAccess;
 use App\Services\TargetPolicy;
@@ -29,6 +30,10 @@ class Dashboard extends Component
         'completed', 'failed', 'cancelled', 'blocked', 'needs_configuration',
         'verification_failed', 'suggestion_ready', 'ready_for_review', 'report_ready',
     ];
+
+    private const RULES_PER_PAGE = 18;
+
+    private const PANELS = ['workspace', 'projects', 'rules', 'settings', ...RepositoryWorkspace::SECTIONS];
 
     #[Locked]
     public ?int $selectedProjectId = null;
@@ -63,13 +68,20 @@ class Dashboard extends Component
 
     public string $repairPolicy = 'verified_pr';
 
-    public array $qaSectors = QaSectors::ALL;
+    public array $runSectors = QaRuleCatalog::SECTORS;
 
     public string $runGuidance = '';
 
     public string $findingSector = 'all';
 
     public string $findingSeverity = 'all';
+
+    public string $ruleSearch = '';
+
+    public string $ruleSector = 'all';
+
+    #[Locked]
+    public int $rulePage = 1;
 
     public ?string $notice = null;
 
@@ -82,10 +94,10 @@ class Dashboard extends Component
         if ($first) {
             $this->selectProject($first->id);
         } else {
-            $this->showingProjectForm = true;
+            $this->newProject();
         }
         $panel = request()->query('panel');
-        if (is_string($panel) && in_array($panel, ['settings', ...RepositoryWorkspace::SECTIONS], true)) {
+        if (is_string($panel) && in_array($panel, self::PANELS, true)) {
             $this->setPanel($panel);
             $this->repositoryRunId = $panel === 'changes' ? (request()->integer('run') ?: null) : null;
             $this->repositoryPullNumber = $panel === 'pull-requests' ? (request()->integer('pull') ?: null) : null;
@@ -100,7 +112,7 @@ class Dashboard extends Component
 
     public function setPanel(string $panel): void
     {
-        abort_unless(in_array($panel, ['workspace', 'settings', ...RepositoryWorkspace::SECTIONS], true), 404);
+        abort_unless(in_array($panel, self::PANELS, true), 404);
         $this->panel = $panel;
         $this->reset(['repositoryRunId', 'repositoryPullNumber', 'notice']);
     }
@@ -109,17 +121,17 @@ class Dashboard extends Component
     {
         $panel = $this->panel;
         $this->selectProject($id);
-        if (in_array($panel, RepositoryWorkspace::SECTIONS, true)) {
+        if (in_array($panel, ['projects', 'rules', ...RepositoryWorkspace::SECTIONS], true)) {
             $this->setPanel($panel);
         }
     }
 
     public function newProject(): void
     {
-        $this->reset(['name', 'repositoryUrl', 'websiteUrl', 'targetMode', 'baseBranch', 'deployedSha', 'repairPolicy', 'qaSectors', 'notice', 'connection']);
+        $this->reset(['name', 'repositoryUrl', 'websiteUrl', 'targetMode', 'baseBranch', 'deployedSha', 'repairPolicy', 'notice', 'connection']);
         $this->editingProjectId = null;
         $this->resetValidation();
-        $this->panel = 'workspace';
+        $this->panel = 'projects';
         $this->showingProjectForm = true;
     }
 
@@ -133,6 +145,7 @@ class Dashboard extends Component
     public function editProject(int $id): void
     {
         $project = $this->projects()->findOrFail($id);
+        $this->panel = 'projects';
         if ($project->runs()->whereNotIn('status', self::TERMINAL_STATUSES)->exists()) {
             $this->addError('run', __('messages.edit_active'));
 
@@ -146,9 +159,7 @@ class Dashboard extends Component
         $this->baseBranch = $project->base_branch ?? '';
         $this->deployedSha = $project->deployed_sha ?? '';
         $this->repairPolicy = $project->repair_policy === 'report_only' ? 'verified_pr' : $project->repair_policy;
-        $this->qaSectors = $project->qaSectors();
         $this->showingProjectForm = true;
-        $this->panel = 'workspace';
         $this->notice = null;
         $this->resetValidation();
     }
@@ -164,8 +175,6 @@ class Dashboard extends Component
             'baseBranch' => ['nullable', 'string', 'max:200', 'regex:~^[A-Za-z0-9][A-Za-z0-9._/-]*$~'],
             'deployedSha' => ['nullable', 'regex:/^[a-fA-F0-9]{40}$/'],
             'repairPolicy' => ['required', Rule::in(['suggest_only', 'verified_pr'])],
-            'qaSectors' => ['present', 'array', 'max:'.count(QaSectors::ALL)],
-            'qaSectors.*' => ['string', 'distinct', Rule::in(QaSectors::ALL)],
         ], [
             'repositoryUrl.regex' => __('messages.repository_url'),
             'deployedSha.regex' => __('messages.deployed_sha'),
@@ -177,8 +186,6 @@ class Dashboard extends Component
             'baseBranch' => __('messages.attributes.baseBranch'),
             'deployedSha' => __('messages.attributes.deployedSha'),
             'repairPolicy' => __('messages.attributes.repairPolicy'),
-            'qaSectors' => __('qa-sectors.title'),
-            'qaSectors.*' => __('qa-sectors.title'),
         ]);
 
         try {
@@ -196,7 +203,6 @@ class Dashboard extends Component
             'base_branch' => $this->repositoryUrl !== '' ? ($this->baseBranch ?: null) : null,
             'deployed_sha' => $this->repositoryUrl !== '' && $this->deployedSha ? strtolower($this->deployedSha) : null,
             'repair_policy' => $this->repositoryUrl !== '' ? $this->repairPolicy : 'report_only',
-            'qa_sectors' => QaSectors::selected($this->qaSectors),
         ];
 
         if ($this->editingProjectId) {
@@ -220,6 +226,7 @@ class Dashboard extends Component
         }
 
         $this->selectProject($project->id);
+        $this->panel = 'projects';
         $this->notice = $project->repository_url ? __('messages.project_saved') : __('messages.website_project_saved');
     }
 
@@ -234,7 +241,7 @@ class Dashboard extends Component
         $this->runGuidance = '';
         $this->notice = null;
         $this->panel = 'workspace';
-        $this->reset(['findingSector', 'findingSeverity']);
+        $this->reset(['runSectors', 'findingSector', 'findingSeverity']);
         $this->resetValidation();
     }
 
@@ -261,23 +268,26 @@ class Dashboard extends Component
 
                 return;
             }
-            app(RepositoryAccess::class)->assertAllowed($project->user, $project->repository_url);
+            $access = app(RepositoryAccess::class);
+            $access->assertAllowed($project->user, $project->repository_url);
             $repository = $github->inspectRepository($project->repository_url);
+            $branch = $project->base_branch ?: $repository['default_branch'];
+            $canPush = $repository['can_push'] && $access->canWrite($project->user, $project->repository_url);
             $this->connection = [
                 'ok' => true,
                 'repository' => $repository['full_name'],
-                'can_push' => (bool) $repository['can_push'],
-                'message' => $repository['can_push']
+                'can_push' => $canPush,
+                'branch' => $branch,
+                'head_sha' => $branch === $repository['default_branch'] ? $repository['head_sha'] : $github->branchHead($project->repository_url, $branch),
+                'message' => $canPush
                     ? __('messages.connection_ready')
                     : __('messages.connection_readonly'),
             ];
-            if (! $project->base_branch) {
-                $project->update(['base_branch' => $repository['default_branch']]);
-            }
         } catch (AuthorizationException $exception) {
             $this->connection = [
                 'ok' => false,
                 'can_push' => false,
+                'needs_repository_grant' => true,
                 'message' => $exception->getMessage(),
             ];
         } catch (\Throwable $exception) {
@@ -290,23 +300,31 @@ class Dashboard extends Component
         }
     }
 
-    public function startRun(): void
+    public function startRun(QaRuleCatalog $catalog): void
     {
-        $validated = $this->validate(['runGuidance' => ['nullable', 'string', 'max:1000']], [], [
+        $validated = $this->validate([
+            'runGuidance' => ['nullable', 'string', 'max:1000'],
+            'runSectors' => ['present', 'array', 'list', 'max:'.count(QaRuleCatalog::SECTORS)],
+            'runSectors.*' => ['string', 'distinct', Rule::in(QaRuleCatalog::SECTORS)],
+        ], [], [
             'runGuidance' => __('ui.run_guidance'),
+            'runSectors' => __('qa-sectors.title'),
+            'runSectors.*' => __('qa-sectors.title'),
         ]);
         $guidance = trim((string) ($validated['runGuidance'] ?? ''));
+        $sectors = QaSectors::selected($validated['runSectors']);
         $project = $this->selectedProject();
 
-        if ($issue = $this->runConfigurationIssue($project)) {
+        if ($issue = $this->runConfigurationIssue($project, $sectors)) {
             $this->addError('run', $issue);
 
             return;
         }
 
-        $run = DB::transaction(function () use ($project, $guidance): QaRun {
+        $guide = $catalog->recommend($sectors, $guidance, 8);
+        $run = DB::transaction(function () use ($project, $guidance, $sectors, $guide): QaRun {
             $project = $this->projects()->whereKey($project->id)->lockForUpdate()->firstOrFail();
-            if ($issue = $this->runConfigurationIssue($project)) {
+            if ($issue = $this->runConfigurationIssue($project, $sectors)) {
                 throw ValidationException::withMessages(['run' => $issue]);
             }
             if ($project->runs()->whereNotIn('status', self::TERMINAL_STATUSES)->exists()) {
@@ -321,11 +339,13 @@ class Dashboard extends Component
                 'goal' => QaRun::ADVANCED_GOAL,
                 'expected_behavior' => QaRun::AUTOMATIC_EXPECTED_BEHAVIOR,
                 'base_sha' => $project->deployed_sha,
-                'qa_sectors' => $project->qaSectors(),
+                'qa_sectors' => $sectors,
+                'report' => ['rule_guide' => $guide],
             ]);
         });
 
         $this->selectedRunId = $run->id;
+        $this->panel = 'workspace';
         $this->runGuidance = '';
         $this->reset(['findingSector', 'findingSeverity']);
         ExecuteQaRun::dispatch($run->id);
@@ -333,18 +353,56 @@ class Dashboard extends Component
         $this->resetValidation('run');
     }
 
-    public function generateRunGuidance(): void
+    public function generateRunGuidance(QaRuleCatalog $catalog): void
     {
         $project = $this->selectedProject();
         if (filled(trim($this->runGuidance))) {
             return;
         }
 
-        $this->runGuidance = __('workspace.guidance_site');
-        if ($project->repository_url) {
-            $this->runGuidance .= "\n\n".__('workspace.guidance_code');
+        $sectors = QaSectors::selected($this->runSectors);
+        if ($sectors === []) {
+            $this->addError('runSectors', __('qa-sectors.select_one'));
+
+            return;
         }
-        $this->resetValidation('runGuidance');
+
+        $ruleExamples = collect($catalog->recommend($sectors, null, 4))
+            ->map(fn (array $rule): string => '• '.$rule['id'].' '.Str::limit(Str::squish($rule['check']), 115))
+            ->implode("\n");
+        $this->runGuidance = implode("\n\n", array_filter([
+            __('workspace.guidance_intro'),
+            $ruleExamples,
+            __($project->repository_url ? 'workspace.guidance_code' : 'workspace.guidance_site'),
+        ]));
+        $this->resetValidation(['runGuidance', 'runSectors']);
+    }
+
+    public function updatedRuleSearch(): void
+    {
+        $this->rulePage = 1;
+    }
+
+    public function updatedRuleSector(): void
+    {
+        $this->rulePage = 1;
+    }
+
+    public function changeRulePage(int $page): void
+    {
+        $this->rulePage = max(1, min(500, $page));
+    }
+
+    public function useRuleForGuidance(string $ruleId, QaRuleCatalog $catalog): void
+    {
+        $this->selectedProject();
+        $rule = $catalog->find($ruleId);
+        abort_unless($rule !== null, 404);
+
+        $this->setPanel('workspace');
+        if ($this->appendGuidance($rule['id'].' '.Str::squish($rule['check']))) {
+            $this->runSectors = QaSectors::selected([...$this->runSectors, $rule['sector']]);
+        }
     }
 
     public function useFindingForGuidance(int $findingId): void
@@ -366,19 +424,30 @@ class Dashboard extends Component
         if (is_string($remediation)) {
             $line .= ' '.Str::limit(Str::squish($remediation), 260);
         }
+        $this->appendGuidance($line);
+    }
+
+    private function appendGuidance(string $line): bool
+    {
         $existing = trim($this->runGuidance);
         if (str_contains($existing, $line)) {
-            return;
+            $this->dispatch('qa-guidance-filled');
+
+            return true;
         }
 
         $draft = $existing === '' ? $line : $existing."\n\n".$line;
         if (mb_strlen($draft) > 1000) {
             $this->addError('runGuidance', __('qa-sectors.guidance_full'));
-        } else {
-            $this->runGuidance = $draft;
-            $this->resetValidation('runGuidance');
+            $this->dispatch('qa-guidance-filled');
+
+            return false;
         }
+        $this->runGuidance = $draft;
+        $this->resetValidation('runGuidance');
         $this->dispatch('qa-guidance-filled');
+
+        return true;
     }
 
     public function cancelRun(int $id): void
@@ -403,13 +472,11 @@ class Dashboard extends Component
         return $this->projects()->findOrFail($this->selectedProjectId);
     }
 
-    private function runConfigurationIssue(Project $project): ?string
+    private function runConfigurationIssue(Project $project, array $sectors): ?string
     {
-        $sectors = $project->qaSectors();
-
         return match (true) {
             $sectors === [] => __('qa-sectors.select_one'),
-            ! QaSectors::needsBrowser($sectors) && ! $project->repository_url => __('qa-sectors.database_needs_repository'),
+            ! QaSectors::needsBrowser($sectors) && in_array('database', $sectors, true) && ! $project->repository_url => __('qa-sectors.database_needs_repository'),
             QaSectors::needsBrowser($sectors) && ! app(BrowserWorker::class)->ready() => __('ui.configure_browser_hint'),
             default => null,
         };
@@ -445,7 +512,25 @@ class Dashboard extends Component
         $githubReady = (bool) config('github.app_id')
             && (bool) config('github.private_key_path')
             && is_file(config('github.private_key_path'));
-        $runConfigurationIssue = $project ? $this->runConfigurationIssue($project) : null;
+        $runConfigurationIssue = $project ? $this->runConfigurationIssue($project, QaSectors::selected($this->runSectors)) : null;
+
+        $catalogs = [];
+        if ($this->panel === 'rules') {
+            $catalog = app(QaRuleCatalog::class);
+            $sector = in_array($this->ruleSector, QaRuleCatalog::SECTORS, true) ? [$this->ruleSector] : null;
+            $search = Str::limit(trim($this->ruleSearch), 120, '');
+            $total = $catalog->count($sector, $search);
+            $pages = max(1, (int) ceil($total / self::RULES_PER_PAGE));
+            $page = min($this->rulePage, $pages);
+            $catalogs = [
+                'ruleEntries' => $catalog->search($sector, $search, self::RULES_PER_PAGE, ($page - 1) * self::RULES_PER_PAGE),
+                'ruleTotal' => $total,
+                'ruleTotalPages' => $pages,
+                'ruleCurrentPage' => $page,
+                'ruleCatalogTotal' => $catalog->count(),
+                'ruleCategories' => $catalog->categories(),
+            ];
+        }
 
         return view('livewire.dashboard', [
             'projects' => $projects,
@@ -460,8 +545,10 @@ class Dashboard extends Component
             'canStartRun' => $runConfigurationIssue === null,
             'runConfigurationIssue' => $runConfigurationIssue,
             'availableQaSectors' => QaSectors::ALL,
+            'runFocusGroups' => ['checks' => QaSectors::ALL, 'reference' => array_values(array_diff(QaRuleCatalog::SECTORS, QaSectors::ALL))],
             'terminalStatuses' => self::TERMINAL_STATUSES,
             'installationUrl' => GitHubAppClient::installationUrl(),
+            ...$catalogs,
         ])->layout('layouts.app');
     }
 }

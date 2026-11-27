@@ -125,7 +125,7 @@ class RepositoryAccessTest extends TestCase
         app()->setLocale('id');
 
         $this->expectException(AuthorizationException::class);
-        $this->expectExceptionMessage('Akun Anda belum diberi akses ke repositori ini.');
+        $this->expectExceptionMessage('Akun Auto QA Anda belum memiliki akses ke repositori ini.');
 
         app(RepositoryAccess::class)->assertAllowed($user, 'https://github.com/example/private-repository');
     }

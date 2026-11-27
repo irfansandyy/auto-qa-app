@@ -7,13 +7,16 @@
         <a href="{{ route('dashboard') }}" class="brand">{{ __('ui.app_name') }}</a>
 
         <details class="project-switcher" x-data x-on:click.outside="$el.removeAttribute('open')" x-on:keydown.escape="$el.removeAttribute('open'); $el.querySelector('summary').focus()">
+            @php
+                $creatingProject = $panel === 'projects' && $showingProjectForm && ! $editingProjectId;
+            @endphp
             <summary aria-label="{{ __('workspace.switch_project') }}">
-                <x-icon :name="$project && ! ($showingProjectForm && ! $editingProjectId) ? 'folder' : 'add'" />
-                <span>{{ $project && ! ($showingProjectForm && ! $editingProjectId) ? $project->name : __('ui.new_project') }}</span>
+                <x-icon :name="$project && ! $creatingProject ? 'folder' : 'add'" />
+                <span>{{ $project && ! $creatingProject ? $project->name : __('ui.new_project') }}</span>
             </summary>
             <div class="project-switcher-menu">
                 @foreach ($projects as $item)
-                    <button type="button" wire:key="switch-project-{{ $item->id }}" wire:click="switchProject({{ $item->id }})" x-on:click="$el.closest('details').removeAttribute('open')" @if ($selectedProjectId === $item->id && ! $showingProjectForm) aria-current="true" @endif>
+                    <button type="button" wire:key="switch-project-{{ $item->id }}" wire:click="switchProject({{ $item->id }})" x-on:click="$el.closest('details').removeAttribute('open')" @if ($selectedProjectId === $item->id && ! $creatingProject) aria-current="true" @endif>
                         <x-icon name="folder" />
                         <span>{{ $item->name }}</span>
                     </button>
@@ -26,10 +29,10 @@
         </details>
 
         <nav class="main-nav" aria-label="{{ __('ui.main_navigation') }}">
-            @foreach (['workspace' => 'dashboard', 'files' => 'folder', 'changes' => 'code', 'git' => 'commit', 'pull-requests' => 'merge', 'settings' => 'settings'] as $destination => $icon)
+            @foreach (['projects' => 'folder', 'workspace' => 'dashboard', 'rules' => 'assignment', 'files' => 'description', 'changes' => 'code', 'git' => 'commit', 'pull-requests' => 'merge', 'settings' => 'settings'] as $destination => $icon)
                 <button type="button" wire:key="workspace-nav-{{ $destination }}" wire:click="setPanel('{{ $destination }}')" class="nav-item {{ $panel === $destination ? 'is-active' : '' }}" @if ($panel === $destination) aria-current="page" @endif>
                     <x-icon :name="$icon" />
-                    {{ __('workspace.nav.'.$destination) }}
+                    {{ in_array($destination, ['projects', 'rules'], true) ? __('dashboard-panels.nav.'.$destination) : __('workspace.nav.'.$destination) }}
                 </button>
             @endforeach
             <a href="{{ route('docs.github-app') }}" class="nav-item">
@@ -58,7 +61,7 @@
         <header class="topbar">
             <div class="breadcrumb">
                 {{ __('ui.workspace') }} <span aria-hidden="true">/</span>
-                <strong>{{ __('workspace.nav.'.$panel) }}</strong>
+                <strong>{{ in_array($panel, ['projects', 'rules'], true) ? __('dashboard-panels.nav.'.$panel) : __('workspace.nav.'.$panel) }}</strong>
             </div>
         </header>
 
@@ -134,6 +137,7 @@
                     </form>
                 </section>
 
+                @include('partials.github-settings')
                 @include('partials.model-settings')
 
                 <div class="section-heading">
@@ -141,24 +145,6 @@
                 </div>
 
                 <div class="connection-grid">
-                    <section class="card connection-card">
-                        <div class="connection-card-top">
-                            <x-icon name="github" />
-                            <span class="badge {{ $githubReady ? 'badge-success' : 'badge-warning' }}">{{ $githubReady ? __('ui.credentials_configured') : __('ui.setup_needed') }}</span>
-                        </div>
-                        <h2>{{ __('ui.github_app') }}</h2>
-                        <p>{{ __('ui.github_identity_description') }}</p>
-                        <div class="connection-actions">
-                            @if ($installationUrl)
-                                <a class="button button-secondary" href="{{ $installationUrl }}" target="_blank" rel="noopener noreferrer">{{ __('ui.install_on_github') }}</a>
-                            @else
-                                <span class="field-hint">{{ __('ui.github_name_hint') }}</span>
-                            @endif
-                        </div>
-                        <a href="{{ route('docs.github-app') }}" class="text-link">{{ __('ui.github_app_guide') }}</a>
-                        <p class="fine-print">{{ __('ui.repository_access_hint') }}</p>
-                    </section>
-
                     <section class="card connection-card">
                         <div class="connection-card-top">
                             <x-icon name="browser" />
@@ -201,13 +187,14 @@
                         <li>
                             <div>
                                 <strong>{{ __('ui.configure_server_heading') }}</strong>
-                                <p>{{ __('ui.configure_server_description') }}</p>
+                                <p>{{ __('dashboard-panels.github.configure_server') }}</p>
+                                <a class="inline-link" href="{{ route('docs.github-app') }}#permissions">{{ __('ui.github_app_guide') }}</a>
                             </div>
                         </li>
                         <li>
                             <div>
                                 <strong>{{ __('ui.install_access_heading') }}</strong>
-                                <p>{{ __('ui.install_access_description') }}</p>
+                                <p>{{ __('dashboard-panels.github.install_and_check') }}</p>
                             </div>
                         </li>
                     </ol>
@@ -223,177 +210,24 @@
                     :pull-number="$repositoryPullNumber"
                     :key="'repository-'.$panel.'-'.$selectedProjectId.'-'.$repositoryRunId.'-'.$repositoryPullNumber"
                 />
+            @elseif ($panel === 'projects')
+                @include('partials.project-management')
+            @elseif ($panel === 'rules')
+                @include('partials.qa-rulebook')
             @else
                 <div class="page-heading">
                     <div>
-                        <h1>{{ $showingProjectForm ? __('ui.project_details') : __('workspace.nav.workspace') }}</h1>
-                        <p>{{ $showingProjectForm ? __('ui.project_details_description') : __('workspace.runs_description') }}</p>
+                        <h1>{{ __('workspace.nav.workspace') }}</h1>
+                        <p>{{ __('workspace.runs_description') }}</p>
                     </div>
-                    @if (! $showingProjectForm)
-                        <div class="action-row">
-                            @if ($project)
-                                <button class="button button-secondary" type="button" wire:click="editProject({{ $project->id }})">{{ __('ui.edit_project') }}</button>
-                            @endif
-                        </div>
+                    @if ($project)
+                        <button class="button button-secondary" type="button" wire:click="editProject({{ $project->id }})">
+                            {{ __('dashboard-panels.project.settings') }}
+                        </button>
                     @endif
                 </div>
 
-                @if ($showingProjectForm)
-                    <div class="setup-layout">
-                        <section class="card project-form-card" aria-labelledby="project-heading">
-                            <div class="section-heading">
-                                <div>
-                                    <h2 id="project-heading">{{ $editingProjectId ? __('ui.edit_project') : __('ui.new_project') }}</h2>
-                                    <p>{{ __('ui.permission_hint') }}</p>
-                                </div>
-                            </div>
-
-                            @if ($errors->any())
-                                <div class="notice notice-error" role="alert" tabindex="-1" x-data x-init="$el.focus()">
-                                    <strong>{{ __('ui.check_project_details') }}</strong>
-                                    <ul>
-                                        @foreach ($errors->getMessages() as $field => $messages)
-                                            <li><a href="#{{ $field }}">{{ $messages[0] }}</a></li>
-                                        @endforeach
-                                    </ul>
-                                </div>
-                            @endif
-
-                            <form wire:submit="saveProject" class="form-stack">
-                                <div class="field">
-                                    <label for="name">{{ __('ui.project_name') }}</label>
-                                    <input id="name" wire:model="name" placeholder="{{ __('ui.project_name_placeholder') }}" required maxlength="100" @error('name') aria-invalid="true" aria-describedby="name-error" @enderror>
-                                    @error('name')
-                                        <span id="name-error" class="field-error">{{ $message }}</span>
-                                    @enderror
-                                </div>
-
-                                <div class="field">
-                                    <label for="websiteUrl">{{ __('ui.website_url') }}</label>
-                                    <input id="websiteUrl" wire:model="websiteUrl" type="url" placeholder="{{ __('ui.website_placeholder') }}" required aria-describedby="website-hint @error('websiteUrl') website-error @enderror" @error('websiteUrl') aria-invalid="true" @enderror>
-                                    <span class="field-hint" id="website-hint">{{ __('ui.website_reachability_hint') }}</span>
-                                    @error('websiteUrl')
-                                        <span id="website-error" class="field-error">{{ $message }}</span>
-                                    @enderror
-                                </div>
-
-                                <div class="field">
-                                    <label for="targetMode">{{ __('ui.website_location') }}</label>
-                                    <select id="targetMode" wire:model.live="targetMode">
-                                        <option value="public">{{ __('ui.public_website') }}</option>
-                                        <option value="local">{{ __('ui.local_website') }}</option>
-                                    </select>
-                                    @error('targetMode')
-                                        <span class="field-error">{{ $message }}</span>
-                                    @enderror
-                                </div>
-
-                                @if ($targetMode === 'local')
-                                    <p class="guide-callout">
-                                        <strong>{{ __('ui.localhost_heading') }}</strong>
-                                        {{ __('ui.localhost_description') }}
-                                    </p>
-                                @endif
-
-                                <div class="field">
-                                    <label for="repositoryUrl">{{ __('ui.github_repository') }} <span class="optional">{{ __('ui.optional') }}</span></label>
-                                    <input id="repositoryUrl" wire:model.live.debounce.400ms="repositoryUrl" type="url" placeholder="{{ __('ui.repository_placeholder') }}" aria-describedby="repository-hint @error('repositoryUrl') repository-error @enderror" @error('repositoryUrl') aria-invalid="true" @enderror>
-                                    <span class="field-hint" id="repository-hint">{{ __('ui.repository_installation_hint') }}</span>
-                                    @error('repositoryUrl')
-                                        <span id="repository-error" class="field-error">{{ $message }}</span>
-                                    @enderror
-                                </div>
-
-                                <fieldset class="qa-sector-options" aria-describedby="qa-sector-options-help">
-                                    <legend>{{ __('qa-sectors.title') }}</legend>
-                                    <p id="qa-sector-options-help" class="field-hint">{{ __('qa-sectors.settings_help') }}</p>
-                                    <div class="qa-sector-grid">
-                                        @foreach ($availableQaSectors as $sector)
-                                            <label class="qa-sector-option">
-                                                <input type="checkbox" wire:model="qaSectors" value="{{ $sector }}">
-                                                <span>
-                                                    <strong>{{ __('qa-sectors.names.'.$sector) }}</strong>
-                                                    <small>{{ __('qa-sectors.descriptions.'.$sector) }}</small>
-                                                </span>
-                                            </label>
-                                        @endforeach
-                                    </div>
-                                    @error('qaSectors') <span class="field-error">{{ $message }}</span> @enderror
-                                    @error('qaSectors.*') <span class="field-error">{{ $message }}</span> @enderror
-                                </fieldset>
-
-                                @if (filled($repositoryUrl))
-                                <fieldset class="policy-field">
-                                    <legend>{{ __('ui.repair_policy') }}</legend>
-                                    <label class="policy-option">
-                                        <input type="radio" wire:model="repairPolicy" value="verified_pr">
-                                        <span>
-                                            <strong>{{ __('ui.verified_draft_pr') }}</strong>
-                                            <span>{{ __('ui.verified_draft_pr_description') }}</span>
-                                        </span>
-                                    </label>
-                                    <label class="policy-option">
-                                        <input type="radio" wire:model="repairPolicy" value="suggest_only">
-                                        <span>
-                                            <strong>{{ __('ui.suggest_only') }}</strong>
-                                            <span>{{ __('ui.suggest_only_description') }}</span>
-                                        </span>
-                                    </label>
-                                    @error('repairPolicy')
-                                        <span class="field-error">{{ $message }}</span>
-                                    @enderror
-                                </fieldset>
-
-                                <details class="advanced-fields" wire:ignore.self x-data @if ($errors->has('baseBranch') || $errors->has('deployedSha')) open @endif>
-                                    <summary>{{ __('ui.source_version_branch') }}</summary>
-                                    <div class="form-stack">
-                                        <div class="field">
-                                            <label for="baseBranch">{{ __('ui.base_branch') }} <span class="optional">{{ __('ui.optional') }}</span></label>
-                                            <input id="baseBranch" wire:model="baseBranch" placeholder="{{ __('ui.base_branch_placeholder') }}">
-                                            @error('baseBranch')
-                                                <span class="field-error" x-init="$el.closest('details').open = true">{{ $message }}</span>
-                                            @enderror
-                                        </div>
-                                        <div class="field">
-                                            <label for="deployedSha">{{ __('ui.deployed_commit_sha') }} <span class="optional">{{ __('ui.needed_for_repair') }}</span></label>
-                                            <input id="deployedSha" wire:model="deployedSha" placeholder="{{ __('ui.deployed_sha_placeholder') }}" maxlength="40" aria-describedby="sha-hint">
-                                            <span id="sha-hint" class="field-hint">{{ __('ui.source_version_hint') }}</span>
-                                            @error('deployedSha')
-                                                <span class="field-error" x-init="$el.closest('details').open = true">{{ $message }}</span>
-                                            @enderror
-                                        </div>
-                                    </div>
-                                </details>
-                                @else
-                                    <p class="guide-callout">{{ __('ui.website_only_description') }}</p>
-                                @endif
-
-                                <div class="form-actions">
-                                    <button class="button button-primary" type="submit" wire:loading.attr="disabled" wire:target="saveProject">
-                                        <span wire:loading.remove wire:target="saveProject">{{ $editingProjectId ? __('ui.save_changes') : __('ui.save_project') }}</span>
-                                        <span wire:loading wire:target="saveProject">{{ __('ui.saving_project') }}</span>
-                                    </button>
-                                    @if ($project)
-                                        <button type="button" class="button button-quiet" wire:click="closeProjectForm">{{ __('ui.cancel') }}</button>
-                                    @endif
-                                </div>
-                            </form>
-                        </section>
-
-                        <aside class="setup-help">
-                            <h2>{{ __('ui.before_starting') }}</h2>
-                            <p>{{ __('ui.project_auto_check') }}</p>
-                            <h3>{{ __('ui.repository_access') }}</h3>
-                            <p>{{ __('ui.repository_permission_hint') }}</p>
-                            <h3>{{ __('ui.local_websites') }}</h3>
-                            <p>{{ __('ui.local_origin_hint') }}</p>
-                            <button class="text-link" type="button" wire:click="setPanel('settings')">
-                                <x-icon name="settings" />
-                                {{ __('ui.manage_connections') }}
-                            </button>
-                        </aside>
-                    </div>
-                @elseif ($project)
+                @if ($project)
                     <section class="card project-overview">
                         <div class="project-overview-heading">
                             <div class="project-summary">
@@ -413,30 +247,7 @@
                             </div>
                             <span class="project-target">{{ $project->target_mode === 'local' ? __('ui.local_target') : __('ui.public_target') }}</span>
                         </div>
-                        <div class="project-scope qa-project-scope">
-                            @if ($project->qaSectors() !== [])
-                                <p class="field-hint">{{ __('qa-sectors.enabled') }}</p>
-                                <ul class="qa-sector-chips">
-                                    @foreach ($project->qaSectors() as $sector)
-                                        <li>{{ __('qa-sectors.names.'.$sector) }}</li>
-                                    @endforeach
-                                </ul>
-                            @else
-                                <p>{{ __('qa-sectors.none_enabled') }}</p>
-                            @endif
-                        </div>
-                        <div class="field run-guidance" x-data x-on:qa-guidance-filled.window="$nextTick(() => $el.querySelector('textarea').focus())">
-                            <div class="guidance-heading" x-data>
-                                <label for="run-guidance">{{ __('ui.run_guidance') }} <span class="field-optional">{{ __('ui.optional') }}</span></label>
-                                <button class="button button-secondary guidance-generate" type="button" wire:click="generateRunGuidance" wire:loading.attr="disabled" wire:target="generateRunGuidance" x-bind:disabled="$wire.runGuidance.trim().length > 0">
-                                    <x-icon name="guidance-stars" />
-                                    {{ __('workspace.generate_guidance') }}
-                                </button>
-                            </div>
-                            <textarea id="run-guidance" wire:model="runGuidance" rows="2" maxlength="1000" aria-describedby="run-guidance-hint @error('runGuidance') run-guidance-error @enderror" @error('runGuidance') aria-invalid="true" @enderror placeholder="{{ __('ui.run_guidance_placeholder') }}"></textarea>
-                            <p id="run-guidance-hint" class="field-hint">{{ __('ui.run_guidance_hint') }}</p>
-                            @error('runGuidance') <p id="run-guidance-error" class="field-error" role="alert">{{ $message }}</p> @enderror
-                        </div>
+                        @include('partials.run-setup')
                         <div class="project-overview-footer">
                             <span class="policy-label">{{ $project->repository_url ? __('ui.repair_policy_label').' '.($project->repair_policy === 'verified_pr' ? __('ui.verified_draft_pr') : __('ui.suggest_only')) : __('ui.website_only_label') }}</span>
                             <div class="action-row">
@@ -454,7 +265,30 @@
                     </section>
 
                     @if ($connection)
-                        <div class="notice {{ $connection['ok'] && ($connection['can_push'] || ! $project->repository_url) ? 'notice-success' : 'notice-warning' }}" role="status">{{ $connection['message'] }}</div>
+                        <div class="notice {{ $connection['ok'] && ($connection['can_push'] || ! $project->repository_url) ? 'notice-success' : 'notice-warning' }}" role="status">
+                            <p>{{ $connection['message'] }}</p>
+                            @if (! empty($connection['needs_repository_grant']))
+                                <div class="managed-project-actions">
+                                    @if (config('github.client_id') && config('github.client_secret'))
+                                        <a class="inline-link" href="{{ route('dashboard', ['panel' => 'settings']) }}#github-connection">{{ __('dashboard-panels.github.account_settings') }}</a>
+                                    @endif
+                                    <a class="inline-link" href="{{ route('docs.github-app') }}#approve">{{ __('dashboard-panels.project.get_repository_access') }}</a>
+                                </div>
+                            @elseif (filled($connection['head_sha'] ?? null))
+                                <dl class="connection-details">
+                                    @if (filled($connection['branch'] ?? null))
+                                        <div>
+                                            <dt>{{ __('ui.base_branch') }}</dt>
+                                            <dd><code>{{ $connection['branch'] }}</code></dd>
+                                        </div>
+                                    @endif
+                                    <div>
+                                        <dt>{{ __('dashboard-panels.runs.branch_head') }}</dt>
+                                        <dd><code>{{ $connection['head_sha'] }}</code></dd>
+                                    </div>
+                                </dl>
+                            @endif
+                        </div>
                     @endif
                     @error('run')
                         <div id="run" class="notice notice-error" role="alert">{{ $message }}</div>
@@ -464,15 +298,15 @@
                             {{ $runConfigurationIssue }}
                             @if ($runConfigurationIssue === __('ui.configure_browser_hint'))
                                 <button class="inline-link" type="button" wire:click="setPanel('settings')">{{ __('ui.open_settings') }}</button>
-                            @else
-                                <button class="inline-link" type="button" wire:click="editProject({{ $project->id }})">{{ __('qa-sectors.edit_project') }}</button>
+                            @elseif ($runConfigurationIssue === __('qa-sectors.database_needs_repository'))
+                                <button class="inline-link" type="button" wire:click="editProject({{ $project->id }})">{{ __('dashboard-panels.project.settings') }}</button>
                             @endif
                         </div>
                     @elseif ($project->repository_url && ! $modelReady)
                         <p class="source-note">{{ __('ui.repair_model_hint') }}</p>
                     @endif
                     @if ($project->repository_url && ! $project->deployed_sha)
-                        <p class="source-note">{{ __('ui.missing_source_note') }}</p>
+                        <p class="source-note">{{ __('dashboard-panels.runs.sha_fallback') }}</p>
                     @endif
 
                     <div class="run-layout {{ $runs->isEmpty() ? 'is-empty' : '' }}">
@@ -551,6 +385,8 @@
                                 @if ($run->error)
                                     <div class="notice notice-error" role="alert">{{ $run->error }}</div>
                                 @endif
+
+                                @include('partials.run-source-reference')
 
                                 @if ($run->advanced && filled($run->guidance))
                                     <section class="finding-section" aria-labelledby="run-guidance-heading">

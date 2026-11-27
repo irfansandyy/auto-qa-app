@@ -12,6 +12,7 @@ return [
     ],
     'runs_description' => 'Start a QA run and review the results for this project.',
     'generate_guidance' => 'Generate prompt',
-    'guidance_site' => 'On the configured site, pick one important user journey and check it on desktop and mobile. Verify input errors, keyboard navigation, and whether the layout stays usable at narrow widths. Record expected behavior, actual behavior, and evidence.',
-    'guidance_code' => 'For a confirmed bug, inspect the relevant source and tests in the connected repository. Suggest the smallest fix and a regression test. Report which checks ran, what passed, and what still needs review.',
+    'guidance_intro' => 'Prioritize these rules where they apply to the selected scope. Record expected behavior, observed behavior, and evidence for any confirmed issue.',
+    'guidance_site' => 'Use the available browser evidence. List checks or user journeys that still need manual review.',
+    'guidance_code' => 'Trace confirmed issues to the relevant source and tests. Propose the smallest fix and a regression test. Identify any checks that still need review.',
 ];

@@ -3,12 +3,15 @@
 namespace App\Services;
 
 use App\Models\User;
+use App\Services\GitHub\GitHubAccount;
 use App\Services\GitHub\RepositoryUrl;
 use Illuminate\Auth\Access\AuthorizationException;
 use InvalidArgumentException;
 
 class RepositoryAccess
 {
+    public function __construct(private GitHubAccount $github) {}
+
     public function assertAllowed(User $user, string $url): void
     {
         if (! $this->canView($user, $url)) {
@@ -18,13 +21,14 @@ class RepositoryAccess
 
     public function canView(User $user, string $url): bool
     {
-        return $this->hasGrant($user, $url, 'repository-access.grants');
+        return $this->hasGrant($user, $url, 'repository-access.grants')
+            || $this->github->repositoryPermissions($user, $url)['read'];
     }
 
     public function canWrite(User $user, string $url): bool
     {
-        return $this->canView($user, $url)
-            && $this->hasGrant($user, $url, 'repository-access.write_grants');
+        return ($this->hasGrant($user, $url, 'repository-access.grants') && $this->hasGrant($user, $url, 'repository-access.write_grants'))
+            || $this->github->repositoryPermissions($user, $url)['write'];
     }
 
     public function assertCanWrite(User $user, string $url): void

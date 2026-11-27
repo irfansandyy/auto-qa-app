@@ -1,6 +1,10 @@
 <?php
 
 return [
-    'denied' => 'Akun Anda belum diberi akses ke repositori ini. Minta pengelola server menyetujuinya, atau hapus tautan repositori untuk menguji situs dan menerima laporan.',
-    'write_denied' => 'Minta izin pengelola Auto QA untuk membuat branch, melakukan commit, atau menggabungkan pull request pada repositori ini.',
+    'denied' => 'Akun Auto QA Anda belum memiliki akses ke repositori ini. Hubungkan GitHub di Pengaturan dan pastikan App terpasang pada repositori. Pengelola juga dapat memberikan akses.',
+    'write_denied' => 'Untuk membuat branch, melakukan commit, atau menggabungkan pull request, hubungkan akun GitHub dengan akses tulis atau minta izin kepada pengelola Auto QA.',
+    'connection_unconfigured' => 'Pengelola server perlu mengatur ID dan secret klien GitHub App.',
+    'connection_failed' => 'GitHub belum dapat dihubungkan. Kembali ke Pengaturan dan coba lagi.',
+    'connected' => 'Akun GitHub Anda terhubung.',
+    'disconnected' => 'Akun GitHub Anda telah diputus dari Auto QA.',
 ];

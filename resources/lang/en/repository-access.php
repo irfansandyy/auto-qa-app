@@ -1,6 +1,10 @@
 <?php
 
 return [
-    'denied' => 'Your account has not been granted access to this repository. Ask the server operator to approve it, or remove the repository link to test the website and receive a report.',
-    'write_denied' => 'Ask your Auto QA operator for permission to create branches, commit changes, or merge pull requests for this repository.',
+    'denied' => 'Your Auto QA account does not have access to this repository. Connect GitHub in Settings and confirm the App is installed on the repository. Your operator can also grant access.',
+    'write_denied' => 'To create branches, commit changes, or merge pull requests, connect a GitHub account with write access to this repository or ask your Auto QA operator for a write grant.',
+    'connection_unconfigured' => 'Your server operator needs to configure the GitHub App client ID and secret.',
+    'connection_failed' => 'GitHub could not be connected. Return to Settings and try again.',
+    'connected' => 'Your GitHub account is connected.',
+    'disconnected' => 'Your GitHub account was disconnected from Auto QA.',
 ];

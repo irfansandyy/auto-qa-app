@@ -11,6 +11,7 @@ use App\Services\BrowserWorker;
 use App\Services\GitHub\GitHubAppClient;
 use App\Services\ModelClient;
 use App\Services\QaAgent;
+use App\Services\QaRuleCatalog;
 use App\Services\QaSectors;
 use App\Services\RepositoryReview;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
@@ -44,23 +45,26 @@ class QaSectorsTest extends TestCase
         ]);
     }
 
-    public function test_new_and_legacy_projects_start_with_all_six_sectors_and_legacy_runs_keep_that_default(): void
+    public function test_run_setup_starts_with_all_catalogue_areas_and_legacy_runs_keep_the_automated_defaults(): void
     {
         $operator = User::factory()->create();
         $component = Livewire::actingAs($operator)->test(Dashboard::class)
-            ->assertSet('qaSectors', self::SECTORS)
-            ->assertSee(__('qa-sectors.descriptions.database'));
+            ->assertSet('runSectors', QaRuleCatalog::SECTORS)
+            ->assertSet('panel', 'projects')
+            ->assertDontSee(__('dashboard-panels.runs.focus'));
 
         $project = Project::factory()->for($operator)->create(['qa_sectors' => null]);
         $run = QaRun::factory()->for($project)->create(['status' => 'completed', 'qa_sectors' => null]);
 
-        $component->call('selectProject', $project->id)->call('editProject', $project->id)
-            ->assertSet('qaSectors', self::SECTORS);
+        $component->call('selectProject', $project->id)
+            ->assertSet('panel', 'workspace')
+            ->assertSee(__('qa-rule-catalog.database'))
+            ->assertSet('runSectors', QaRuleCatalog::SECTORS);
         $this->assertSame(self::SECTORS, $project->qaSectors());
         $this->assertSame(self::SECTORS, $run->qaSectors());
     }
 
-    public function test_project_settings_can_change_without_modifying_the_queued_runs_sector_snapshot(): void
+    public function test_each_run_snapshots_its_own_focus_and_reference_rules(): void
     {
         $operator = User::factory()->create();
         Queue::fake([ExecuteQaRun::class]);
@@ -70,24 +74,23 @@ class QaSectorsTest extends TestCase
             ->set('websiteUrl', self::SITE)
             ->set('repositoryUrl', self::REPOSITORY)
             ->set('targetMode', 'local')
-            ->set('qaSectors', ['database', 'ui'])
             ->call('saveProject')->assertHasNoErrors()
+            ->set('runSectors', ['database', 'ui', 'observability'])
             ->call('startRun')->assertHasNoErrors();
 
         $project = Project::query()->sole();
         $run = $project->runs()->sole();
-        $this->assertSame(['ui', 'database'], $project->qa_sectors);
-        $this->assertSame(['ui', 'database'], $run->qa_sectors);
+        $this->assertNull($project->qa_sectors);
+        $this->assertSame(['ui', 'database', 'observability'], $run->qa_sectors);
+        $this->assertContains('observability', array_column($run->report['rule_guide'], 'sector'));
         Queue::assertPushed(ExecuteQaRun::class, 1);
 
         $run->update(['status' => 'report_ready']);
-        $component->call('editProject', $project->id)
-            ->assertSet('qaSectors', ['ui', 'database'])
-            ->set('qaSectors', ['performance'])
-            ->call('saveProject')->assertHasNoErrors();
+        $component->set('runSectors', ['performance'])->call('startRun')->assertHasNoErrors();
 
-        $this->assertSame(['performance'], $project->fresh()->qa_sectors);
-        $this->assertSame(['ui', 'database'], $run->fresh()->qa_sectors);
+        $this->assertNull($project->fresh()->qa_sectors);
+        $this->assertSame(['ui', 'database', 'observability'], $run->fresh()->qa_sectors);
+        $this->assertSame(['performance'], $project->runs()->latest('id')->firstOrFail()->qa_sectors);
     }
 
     public function test_disabled_sectors_are_not_replaced_with_defaults_or_allowed_to_queue_an_empty_run(): void
@@ -99,14 +102,13 @@ class QaSectorsTest extends TestCase
             ->set('name', 'Website')
             ->set('websiteUrl', self::SITE)
             ->set('targetMode', 'local')
-            ->set('qaSectors', ['unsupported'])
-            ->call('saveProject')->assertHasErrors(['qaSectors.0'])
-            ->set('qaSectors', [])
             ->call('saveProject')->assertHasNoErrors()
-            ->assertSee(__('qa-sectors.none_enabled'))
+            ->set('runSectors', ['unsupported'])
+            ->call('startRun')->assertHasErrors(['runSectors.0'])
+            ->set('runSectors', [])
             ->call('startRun')->assertHasErrors(['run']);
 
-        $this->assertSame([], Project::query()->sole()->qa_sectors);
+        $this->assertNull(Project::query()->sole()->qa_sectors);
         $this->assertDatabaseCount('qa_runs', 0);
         Queue::assertNothingPushed();
     }
@@ -178,6 +180,7 @@ class QaSectorsTest extends TestCase
         $model->shouldNotReceive('decide');
 
         Livewire::actingAs($project->user)->test(Dashboard::class)
+            ->set('runSectors', ['database'])
             ->call('startRun')->assertHasNoErrors();
         $run = $project->runs()->sole();
         $this->assertSame(['database'], $run->qa_sectors);

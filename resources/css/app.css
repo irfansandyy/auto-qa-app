@@ -184,8 +184,8 @@ h4 { font-size: 15px; font-weight: 650; }
 .project-switcher-menu button { display: flex; width: 100%; min-height: 44px; gap: 10px; align-items: center; padding: 7px 9px; border: 0; border-radius: 5px; background: transparent; color: var(--sidebar-emphasis); text-align: start; font-size: 13px; }
 .project-switcher-menu button:hover, .project-switcher-menu button[aria-current] { background: var(--sidebar-hover); }
 .project-switcher-menu button:last-child { margin-top: 3px; color: var(--sidebar-action); }
-.main-nav { display: grid; gap: 5px; margin-top: 20px; min-height: 0; overflow: auto; }
-.nav-item { display: flex; align-items: center; gap: 13px; min-height: 45px; padding: 11px 14px; border: 0; border-radius: 6px; background: transparent; color: var(--sidebar-muted); text-align: left; text-decoration: none; font-size: 14px; }
+.main-nav { display: grid; gap: 3px; margin-top: 20px; min-height: 0; overflow: auto; }
+.nav-item { display: flex; align-items: center; gap: 13px; min-height: 45px; padding: 9px 14px; border: 0; border-radius: 6px; background: transparent; color: var(--sidebar-muted); text-align: left; text-decoration: none; font-size: 14px; }
 .nav-item.is-active { background: var(--sidebar-active); color: var(--sidebar-emphasis); }
 .nav-item:hover, .project-nav-item:hover { background: var(--sidebar-hover); color: var(--sidebar-emphasis); }
 .nav-item.is-active svg { color: var(--sidebar-active-icon); }
@@ -265,14 +265,61 @@ summary::-webkit-details-marker { display: none; }
 .project-links { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; margin-top: 7px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .project-links a { display: inline-flex; align-items: center; gap: 6px; min-width: 0; text-decoration: none; }
 .project-links a:hover { color: var(--link); text-decoration: underline; }
-.project-scope { padding: 0 26px 22px; color: var(--muted); font-size: 13px; line-height: 1.65; }
+.managed-projects { list-style: none; margin: 0; padding: 0; }
+.managed-project { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px 24px; padding: 20px 26px; }
+.managed-project + .managed-project { border-top: 1px solid var(--border); }
+.managed-project-info { min-width: 0; }
+.managed-project-heading, .managed-project-actions, .github-settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.run-setup { display: grid; min-width: 0; gap: 22px; padding: 0 26px 22px; }
+.run-focus { min-inline-size: 0; margin: 0; padding: 0; border: 0; }
+.run-focus legend, .qa-rule-filters label > span { color: var(--field-label); font-size: 12px; font-weight: 600; }
+.run-focus-intro { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0 12px; margin-bottom: 6px; }
+.run-focus-groups { display: grid; gap: 12px; }
+.run-focus-group-label { margin-bottom: 5px; color: var(--muted); font-size: 11px; font-weight: 550; }
+.run-focus-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.run-focus-option { display: inline-flex; align-items: center; gap: 7px; min-width: 0; min-height: 44px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; color: var(--field-label); cursor: pointer; font-size: 12px; }
+.run-focus-option:has(input:checked) { border-color: var(--control-border); background: var(--surface-soft); }
+.run-focus-option:hover { border-color: var(--selected-border); }
+.run-focus-option input { flex: 0 0 16px; width: 16px; height: 16px; accent-color: var(--primary); }
+.run-focus .field-error { margin-top: 8px; }
 .project-overview-footer { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 16px 26px; border-top: 1px solid var(--border); background: var(--panel-footer); border-radius: 0 0 var(--radius) var(--radius); }
+.connection-details, .run-source-reference { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 9px 0 0; overflow-wrap: anywhere; }
+.connection-details > div, .run-source-reference > div { min-width: 0; }
+.connection-details dt, .run-source-reference dt { font-size: 11px; }
+.connection-details dd, .run-source-reference dd { margin: 1px 0 0; font-size: 12px; }
+.run-source-reference { margin-bottom: 15px; padding: 13px 15px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-soft); }
+.run-source-reference dt { color: var(--muted); }
+.run-rule-reference summary:hover { color: var(--link); text-decoration: underline; }
+.run-rule-reference { margin-bottom: 15px; }
+.run-rule-reference ul { display: grid; gap: 5px; padding: 0; margin: 8px 0 0; list-style: none; font-size: 12px; }
+.run-rule-reference code { padding-right: 5px; color: var(--metadata-text); }
 .action-row { display: flex; align-items: center; gap: 10px; }
 .policy-label { font-size: 11px; font-weight: 550; color: var(--policy-text); }
 .source-note { margin: 1px 0 24px; color: var(--muted); font-size: 11px; line-height: 1.7; }
 .run-layout { display: grid; grid-template-columns: minmax(200px, 246px) minmax(0, 1fr); gap: 24px; align-items: start; }
 .guidance-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; }
 .guidance-generate svg { color: var(--link); }
+.qa-rulebook { min-width: 0; }
+.qa-rule-filters { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); align-items: end; gap: 16px; padding: 24px 26px 12px; }
+.qa-rule-result-count { padding: 0 26px 12px; }
+.qa-rule-list { padding: 0; margin: 0; list-style: none; }
+.qa-rule-list > li { border-top: 1px solid var(--border); }
+.qa-rule-summary { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 7px 20px; min-height: 56px; padding: 12px 26px; }
+.qa-rule-summary:hover, .qa-rule-details[open] .qa-rule-summary { background: var(--surface-soft); }
+.qa-rule-summary:focus-visible { outline-offset: -4px; }
+.qa-rule-name, .qa-rule-metadata, .qa-rule-tags { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.qa-rule-name { min-width: 0; color: var(--text); overflow-wrap: anywhere; }
+.qa-rule-name code { color: var(--metadata-text); font-size: 11px; }
+.qa-rule-name strong { font-size: 13px; font-weight: 600; }
+.qa-rule-metadata { font-weight: 400; color: var(--muted); }
+.qa-rule-expand { color: var(--link); }
+.qa-rule-details[open] .qa-rule-expand { visibility: hidden; }
+.qa-rule-content { display: grid; justify-items: start; gap: 13px; padding: 15px 26px 20px; }
+.qa-rule-content dl { display: grid; gap: 12px; margin: 0; font-size: 13px; line-height: 1.65; }
+.qa-rule-content dt { font-weight: 600; }
+.qa-rule-content dd { margin: 3px 0 0; color: var(--muted); overflow-wrap: anywhere; }
+.qa-rule-empty { padding: 24px 26px; color: var(--muted); font-size: 13px; }
+.qa-rule-pagination { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 7px 14px; padding: 14px 26px; border-top: 1px solid var(--border); }
 .run-changes-link { margin-top: 16px; }
 .run-main { padding: 25px 26px; }
 .run-main > .section-heading { border-bottom: 1px solid var(--border); }
@@ -334,7 +381,7 @@ pre { display: block; margin: 8px 0 0; padding: 14px; white-space: pre-wrap; ove
 .history-indicator { flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--primary); }
 .history-indicator-finished { background: var(--success); }
 .history-indicator-attention { background: var(--danger); }
-.connection-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; margin-bottom: 26px; }
+.connection-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-bottom: 26px; }
 .connection-card { padding: 22px; }
 .connection-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 7px; margin-bottom: 21px; }
 .connection-card h2 { font-size: 16px; }
@@ -564,7 +611,8 @@ pre { display: block; margin: 8px 0 0; padding: 14px; white-space: pre-wrap; ove
     .field input, .field textarea, .field select { font-size: 16px; }
     .project-overview-heading { padding: 20px; }
     .project-overview-heading h2 { font-size: 17px; }
-    .project-scope { padding: 0 20px 20px; }
+    .managed-project, .run-setup, .qa-rule-filters, .qa-rule-result-count, .qa-rule-summary, .qa-rule-content, .qa-rule-empty, .qa-rule-pagination { padding-inline: 20px; }
+    .qa-rule-filters { grid-template-columns: minmax(0, 1fr); gap: 12px; }
     .project-overview-footer { padding: 17px 20px; gap: 16px; }
     .action-row { width: 100%; }
     .action-row > button { flex: 1; padding-left: 12px; padding-right: 12px; }

@@ -11,7 +11,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
 #[Fillable(['name', 'email', 'password', 'locale', 'theme', 'model_provider', 'model_name', 'model_base_url', 'model_api_key'])]
-#[Hidden(['password', 'remember_token', 'model_api_key'])]
+#[Hidden(['password', 'remember_token', 'model_api_key', 'github_credentials'])]
 class User extends Authenticatable
 {
     /** @use HasFactory<UserFactory> */
@@ -28,6 +28,7 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'model_api_key' => 'encrypted',
+            'github_credentials' => 'encrypted:array',
         ];
     }
 }

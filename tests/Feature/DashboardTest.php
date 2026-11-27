@@ -94,6 +94,8 @@ class DashboardTest extends TestCase
             ->set('baseBranch', 'main')
             ->set('deployedSha', str_repeat('b', 40))
             ->call('saveProject')->assertHasNoErrors()
+            ->assertSet('panel', 'projects')
+            ->call('setPanel', 'workspace')
             ->assertSee('Test and report')
             ->assertDontSee('The deployed commit is not recorded.')
             ->call('startRun')->assertHasNoErrors();

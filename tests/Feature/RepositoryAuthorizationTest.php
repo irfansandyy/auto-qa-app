@@ -57,14 +57,16 @@ class RepositoryAuthorizationTest extends TestCase
     {
         $owner = User::factory()->create();
         $project = Project::factory()->for($owner)->create(['repository_url' => self::REPOSITORY]);
-        config()->set('repository-access.grants', [$owner->id => ['example/private-repository']]);
+        config(['repository-access.grants' => [$owner->id => ['example/private-repository']],
+            'repository-access.write_grants' => [$owner->id => ['example/private-repository']]]);
         $this->mock(TargetPolicy::class)->shouldReceive('assertAllowed')->once()->with($project->website_url, $project->target_mode);
         $this->mock(GitHubAppClient::class)->shouldReceive('inspectRepository')->once()->with(self::REPOSITORY)->andReturn([
-            'full_name' => 'example/private-repository', 'can_push' => true, 'default_branch' => 'main',
+            'full_name' => 'example/private-repository', 'can_push' => true, 'default_branch' => 'main', 'head_sha' => self::BASE_SHA,
         ]);
 
         Livewire::actingAs($owner)->test(Dashboard::class)
-            ->call('checkConnection')->assertSet('connection.ok', true)->assertSet('connection.can_push', true);
+            ->call('checkConnection')->assertSet('connection.ok', true)->assertSet('connection.can_push', true)
+            ->assertSet('connection.head_sha', self::BASE_SHA);
 
         Http::assertNothingSent();
     }
@@ -100,7 +102,8 @@ class RepositoryAuthorizationTest extends TestCase
     public function test_revoking_repository_access_during_verification_prevents_commit_and_pull_request_publication(): void
     {
         $owner = User::factory()->create();
-        config()->set('repository-access.grants', [$owner->id => ['example/private-repository']]);
+        config(['repository-access.grants' => [$owner->id => ['example/private-repository']],
+            'repository-access.write_grants' => [$owner->id => ['example/private-repository']]]);
         $project = Project::factory()->for($owner)->local()->publishing()->create(['repository_url' => self::REPOSITORY]);
         $run = QaRun::factory()->for($project)->create();
         [$model, $github, $sandbox] = $this->prepareInitialServerFailure($run);
@@ -136,7 +139,7 @@ class RepositoryAuthorizationTest extends TestCase
 
         $run->refresh();
         $this->assertSame('blocked', $run->status);
-        $this->assertSame(__('repository-access.denied'), $run->report['summary']);
+        $this->assertSame(__('repository-access.write_denied'), $run->report['summary']);
         $this->assertSame($files, $run->patch_files);
         $this->assertTrue($run->verification['passed']);
         $this->assertNull($run->pr_url);

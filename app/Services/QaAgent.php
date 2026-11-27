@@ -7,6 +7,7 @@ use App\Services\GitHub\GitHubAppClient;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use InvalidArgumentException;
 use RuntimeException;
 
 class QaAgent
@@ -188,7 +189,12 @@ class QaAgent
         $sectors = $run->qaSectors();
         $needsBrowser = QaSectors::needsBrowser($sectors);
         [$journey, $artifacts] = $needsBrowser ? $this->runBrowserReview($run) : [null, []];
-        $repository = $this->reviewRepository($run, $journey['snapshot']['source_sha'] ?? null, $sectors);
+        $reference = $this->resolveSourceReference($run, $journey['snapshot']['source_sha'] ?? null);
+        $repository = $this->reviewRepository($run, $reference, $sectors);
+        $sourceReport = $reference === null ? [] : ['source_reference' => $reference];
+        if (isset($reference['sha'])) {
+            $this->updateActive($run, ['base_sha' => $reference['sha']]);
+        }
         $audit = [
             'frontend' => $journey['frontend'] ?? ['status' => 'not_checked', 'pages_reviewed' => 0],
             'hardening' => $journey['hardening'] ?? ['status' => 'not_checked'],
@@ -205,16 +211,26 @@ class QaAgent
 
         if ($journey === null) {
             $completed = ! $needsBrowser && $this->completeSectorCoverage($audit) && ! $run->findings()->exists();
+            $guidanceOnly = array_intersect($sectors, QaSectors::ALL) === [];
             $this->finish($run, $completed ? 'completed' : 'report_ready', [
-                'message' => $needsBrowser ? 'browser_review_unavailable' : 'advanced_complete',
-                'summary' => $needsBrowser ? 'The browser review could not finish. See the reported coverage.' : 'The requested source review has finished. See the coverage for each enabled sector.',
+                ...$sourceReport,
+                'message' => match (true) {
+                    $guidanceOnly => 'rule_reference_only',
+                    $needsBrowser => 'browser_review_unavailable',
+                    default => 'advanced_complete',
+                },
+                'summary' => match (true) {
+                    $guidanceOnly => 'Rule references are ready for manual review.',
+                    $needsBrowser => 'The browser review could not finish. See the reported coverage.',
+                    default => 'The requested source review has finished. See the coverage for each enabled sector.',
+                },
                 'audit' => $audit, 'artifacts' => $artifacts, 'coverage' => self::ADVANCED_COVERAGE,
             ]);
 
             return;
         }
 
-        $this->completeAutomaticJourney($run, $journey, $artifacts, $audit);
+        $this->completeAutomaticJourney($run, $journey, $artifacts, $audit, $sourceReport);
     }
 
     /** @return array{?array, array} */
@@ -246,7 +262,44 @@ class QaAgent
         return [$journey, $artifacts];
     }
 
-    private function reviewRepository(QaRun $run, ?string $observedSha, array $sectors): array
+    /** @return array{sha: ?string, branch: ?string, origin: string}|null */
+    private function resolveSourceReference(QaRun $run, ?string $observedSha): ?array
+    {
+        $project = $run->project;
+        if (blank($project->repository_url)) {
+            return null;
+        }
+
+        $branch = $project->base_branch;
+        $configured = $project->deployed_sha;
+        if (($configured && ! preg_match('/\A[0-9a-f]{40}\z/i', $configured))
+            || ($observedSha && ! preg_match('/\A[0-9a-f]{40}\z/i', $observedSha))
+            || ($configured && $observedSha && strcasecmp($configured, $observedSha) !== 0)) {
+            return ['sha' => null, 'branch' => $branch, 'origin' => 'conflict'];
+        }
+        if ($configured || $observedSha) {
+            return ['sha' => strtolower($configured ?: $observedSha), 'branch' => $branch, 'origin' => $configured ? 'configured' : 'observed'];
+        }
+
+        try {
+            app(RepositoryAccess::class)->assertAllowed($project->user, $project->repository_url);
+            if (filled($branch)) {
+                $sha = $this->github->branchHead($project->repository_url, $branch);
+            } else {
+                $repository = $this->github->inspectRepository($project->repository_url);
+                $sha = $repository['head_sha'];
+                $branch = $repository['default_branch'];
+            }
+
+            return ['sha' => $sha, 'branch' => $branch, 'origin' => 'github_latest'];
+        } catch (AuthorizationException) {
+            return ['sha' => null, 'branch' => $branch, 'origin' => 'unauthorized'];
+        } catch (RuntimeException|InvalidArgumentException) {
+            return ['sha' => null, 'branch' => $branch, 'origin' => 'unavailable'];
+        }
+    }
+
+    private function reviewRepository(QaRun $run, ?array $reference, array $sectors): array
     {
         if (array_intersect($sectors, QaSectors::REPOSITORY) === []) {
             return ['source_status' => 'disabled', 'advisory_status' => 'disabled', 'database_status' => 'disabled'];
@@ -257,12 +310,13 @@ class QaAgent
 
         $this->assertActive($run);
         $this->step($run, 'diagnosis', 'Reviewing approved source files and dependency advisories.', ['message' => 'repository_scan']);
-        $configuredSha = $run->project->deployed_sha;
-        $sourceSha = $observedSha && $configuredSha && strcasecmp($observedSha, $configuredSha) !== 0
-            ? null
-            : ($configuredSha ?: $observedSha);
+        if (! isset($reference['sha'])) {
+            $status = ($reference['origin'] ?? null) === 'unauthorized' ? 'unauthorized' : 'unavailable';
+
+            return ['source_status' => $status, 'advisory_status' => $status, 'database_status' => $status];
+        }
         try {
-            $review = app(RepositoryReview::class)->review($run->project, $sourceSha, $run->guidance, $sectors);
+            $review = app(RepositoryReview::class)->review($run->project, $reference['sha'], $run->guidance, $sectors);
         } catch (RuntimeException|AuthorizationException) {
             $this->assertActive($run);
 
@@ -270,6 +324,9 @@ class QaAgent
         }
         $this->assertActive($run);
         $run->findings()->createMany($review['findings']);
+        if ($reference['origin'] === 'github_latest') {
+            $review['coverage']['source_matches_deployment'] = false;
+        }
 
         return $review['coverage'];
     }
@@ -483,14 +540,14 @@ class QaAgent
         return $failure;
     }
 
-    private function completeAutomaticJourney(QaRun $run, array $journey, array $artifacts, ?array $audit = null): void
+    private function completeAutomaticJourney(QaRun $run, array $journey, array $artifacts, ?array $audit = null, array $sourceReport = []): void
     {
         $snapshot = $journey['snapshot'];
         $failure = $journey['failure'];
         $checkedPages = $journey['checked_pages'];
         $report = ['actions' => $journey['actions'], 'checked_pages' => $checkedPages, 'passed_assertions' => count($checkedPages),
             'artifacts' => $artifacts, 'coverage' => $audit === null ? self::AUTOMATIC_COVERAGE : self::ADVANCED_COVERAGE,
-            ...($audit !== null ? ['audit' => $audit] : [])];
+            ...($audit !== null ? ['audit' => $audit, 'rule_guide' => $run->report['rule_guide'] ?? []] : []), ...$sourceReport];
         if ($failure === null) {
             if ($audit !== null) {
                 $reportReady = $run->findings()->exists() || ! $journey['passed'] || ! $this->completeSectorCoverage($audit);
@@ -549,7 +606,16 @@ class QaAgent
     private function repair(QaRun $run, array $actions, array $snapshot, array $formSnapshot, array $identity, array $automaticControl = []): void
     {
         $project = $run->project;
-        $sha = $project->deployed_sha ?: ($snapshot['source_sha'] ?? null);
+        $reference = $run->report['source_reference'] ?? null;
+        $origin = $reference['origin'] ?? null;
+        if (in_array($origin, ['conflict', 'unauthorized'], true)) {
+            $this->finish($run, 'blocked', array_merge($run->report, [
+                'summary' => $origin === 'unauthorized' ? __('repository-access.denied') : 'The configured deployment commit does not match the website source header, or is not a full Git commit SHA.',
+            ]));
+
+            return;
+        }
+        $sha = $reference['sha'] ?? ($project->deployed_sha ?: ($snapshot['source_sha'] ?? null));
         if (! $sha) {
             $this->finish($run, 'needs_configuration', array_merge($run->report, [
                 'summary' => 'A finding was saved. Supply the website deployed commit under Advanced setup, or expose X-AutoQA-Commit, to diagnose matching source safely.',
@@ -583,7 +649,7 @@ class QaAgent
         if ($run->automatic) {
             $this->step($run, 'diagnosis', 'Looking for the source of the observed page error.', ['message' => 'source_review']);
         }
-        $repo = $this->github->inspectRepository($project->repository_url);
+        $repository = $origin === 'github_latest' ? null : $this->github->inspectRepository($project->repository_url);
         $tree = $this->github->repositoryTree($project->repository_url, $sha);
         $candidates = array_values(array_filter($tree, fn ($file) => ($file['size'] ?? PHP_INT_MAX) <= 6000));
         $selection = $this->model->decide('Choose up to four existing source files relevant to the failed journey from this repository tree. Return {files:[path,...]}. Do not invent file names.',
@@ -607,9 +673,13 @@ class QaAgent
         } else {
             $patchInstruction .= ' Use qa_identity as valid synthetic test data with matching password and confirmation when those fields are required; obey the existing validation rules and requested omissions. Keep optional inputs unspecified unless the goal requires them.';
         }
+        if ($run->advanced) {
+            $patchInstruction .= ' The QA rule references are review guidance. Base the diagnosis on the observed behavior and source.';
+        }
         $patch = $this->model->decide($patchInstruction,
             ['expected_behavior' => $run->expected_behavior, 'failure' => $run->report['failure'], 'source' => $context,
                 ...($run->automatic ? ['observed_browser_actions' => $this->modelHistory($actions)] : ['qa_identity' => $identity]),
+                ...($run->advanced ? ['qa_rule_reference' => array_slice($run->report['rule_guide'] ?? [], 0, 6)] : []),
                 ...($run->advanced && filled($run->guidance) ? ['operator_focus' => $run->guidance] : [])],
             (int) config('autoqa.model_repair_timeout', 600), QaDecisionSchemas::repair());
         $files = $patch['patch_files'] ?? [];
@@ -635,6 +705,11 @@ class QaAgent
             'patch_added_test' => $test,
         ])]);
         $this->step($run, 'diagnosis', $patch['diagnosis'] ?? 'A proposed patch and regression test are ready.', ['files' => array_keys($files)]);
+        if ($origin === 'github_latest') {
+            $this->finish($run, 'suggestion_ready', [...$run->report, 'summary' => 'The proposal uses the latest GitHub commit. Confirm the deployed SHA to verify and publish the repair.']);
+
+            return;
+        }
         if ($project->repair_policy === 'suggest_only') {
             $this->finish($run, 'suggestion_ready', array_merge($run->report, ['summary' => 'The proposed repair is ready to review. No repository changes were published.']));
 
@@ -685,11 +760,11 @@ class QaAgent
             return;
         }
         $this->assertActive($run);
-        $baseBranch = $project->base_branch ?: $repo['default_branch'];
         try {
-            app(RepositoryAccess::class)->assertAllowed($project->user->fresh(), $project->repository_url);
+            app(RepositoryAccess::class)->assertCanWrite($project->user->fresh(), $project->repository_url);
+            $baseBranch = $reference['branch'] ?? ($project->base_branch ?: $repository['default_branch']);
             $this->github->assertPublicationAllowed($project->repository_url, $baseBranch, $sha);
-        } catch (RuntimeException|\InvalidArgumentException|AuthorizationException $exception) {
+        } catch (RuntimeException|InvalidArgumentException|AuthorizationException $exception) {
             $this->finish($run, 'blocked', array_merge($run->report, ['summary' => $exception->getMessage()]));
 
             return;
@@ -885,6 +960,9 @@ class QaAgent
     private function finish(QaRun $run, string $status, array $report): void
     {
         $this->assertActive($run);
+        if ($run->advanced && isset($run->report['rule_guide'])) {
+            $report['rule_guide'] ??= $run->report['rule_guide'];
+        }
         $data = isset($report['message']) ? ['message' => $report['message']] : [];
         if (($report['message'] ?? null) === 'http_status') {
             $data['document_status'] = $report['failure']['document_status'];

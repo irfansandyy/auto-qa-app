@@ -135,6 +135,7 @@ return [
         'unlabelled_link' => 'Sebuah tautan pada halaman telah dibuka.',
         'completed' => 'Halaman yang diperiksa berhasil dimuat dan menampilkan konten.',
         'advanced_complete' => 'Pemeriksaan telah selesai. Lihat temuan dan cakupan setiap pemeriksaan.',
+        'rule_reference_only' => 'Referensi aturan siap untuk ditinjau secara manual.',
         'browser_review_unavailable' => 'Pemeriksaan browser belum selesai. Hasil kode sumber dan dependensi yang tersedia ditampilkan di bawah.',
         'frontend_scan' => 'Memeriksa tata letak desktop dan seluler serta aksesibilitas dasar.',
         'repository_scan' => 'Meninjau kode sumber yang disetujui dan advisori dependensi.',

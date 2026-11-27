@@ -135,6 +135,7 @@ return [
         'unlabelled_link' => 'Followed a link from the page.',
         'completed' => 'The checked pages loaded and displayed visible content.',
         'advanced_complete' => 'The review has finished. See the findings and coverage for each check.',
+        'rule_reference_only' => 'Rule references are ready for manual review.',
         'browser_review_unavailable' => 'The browser review could not finish. Any available source and dependency results are shown below.',
         'frontend_scan' => 'Checked desktop and mobile layouts and basic accessibility.',
         'repository_scan' => 'Reviewing approved source files and dependency advisories.',

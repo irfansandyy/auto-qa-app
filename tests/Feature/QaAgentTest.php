@@ -9,6 +9,7 @@ use App\Services\GitHub\GitHubAppClient;
 use App\Services\ModelClient;
 use App\Services\QaAgent;
 use App\Services\RepairSandbox;
+use App\Services\RepositoryReview;
 use App\Services\TargetPolicy;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Mockery\MockInterface;
@@ -180,6 +181,43 @@ class QaAgentTest extends TestCase
         $this->assertSame($files, $run->patch_files);
         $this->assertStringContainsString('separate healthy page', $run->report['summary']);
         $this->assertNull($run->pr_url);
+    }
+
+    public function test_missing_deployed_sha_uses_the_selected_branch_commit_for_audit_and_keeps_repairs_as_proposals(): void
+    {
+        $project = Project::factory()->local()->publishing()->create(['deployed_sha' => null, 'base_branch' => 'release/current']);
+        $rule = ['id' => 'backend.deterministic-errors', 'title' => 'Report failures clearly', 'check' => 'Review recorded errors.'];
+        $run = QaRun::factory()->for($project)->create(['automatic' => true, 'advanced' => true, 'qa_sectors' => ['backend'],
+            'report' => ['rule_guide' => [$rule]],
+        ]);
+        $home = $project->website_url;
+        $errorPage = $home.'/register';
+        $snapshot = ['url' => $home, 'document_status' => 200, 'elements' => [['tag' => 'a', 'text' => 'Registration', 'read_only_url' => $errorPage]]];
+        [$browser, $model, $github, $sandbox] = $this->automaticDependencies($run, $snapshot);
+        $files = $this->expectAutomaticRepairProposal($run, $model, $github, $errorPage, true);
+        $browser->shouldReceive('act')->once()->ordered()->with('browser-session', ['tool' => 'assert_page'])
+            ->andReturn(['snapshot' => $snapshot, 'assertion' => ['passed' => true]]);
+        $browser->shouldReceive('act')->once()->ordered()->with('browser-session', ['tool' => 'navigate', 'url' => $errorPage])
+            ->andReturn(['snapshot' => ['url' => $errorPage, 'document_status' => 500, 'elements' => []]]);
+        $github->shouldReceive('branchHead')->once()->with($project->repository_url, 'release/current')->andReturn(self::BASE_SHA);
+        $this->mock(RepositoryReview::class)->shouldReceive('review')->once()->withArgs(fn ($actual, $sha, $guidance, $sectors): bool => $project->is($actual)
+            && $sha === self::BASE_SHA && $sectors === ['backend'])
+            ->andReturn(['coverage' => ['source_status' => 'reviewed', 'source_matches_deployment' => true], 'findings' => []]);
+        $sandbox->shouldNotReceive('ready');
+        $sandbox->shouldNotReceive('verify');
+        $this->expectNoPublication($github);
+
+        app(QaAgent::class)->run($run->id);
+
+        $run->refresh();
+        $this->assertSame('suggestion_ready', $run->status, (string) $run->error);
+        $this->assertSame(self::BASE_SHA, $run->base_sha);
+        $this->assertSame(['sha' => self::BASE_SHA, 'branch' => 'release/current', 'origin' => 'github_latest'], $run->report['source_reference']);
+        $this->assertFalse($run->report['audit']['repository']['source_matches_deployment']);
+        $this->assertSame([$rule], $run->report['rule_guide']);
+        $this->assertSame($files, $run->patch_files);
+        $this->assertNull($run->pr_url);
+        $this->assertNull($project->fresh()->deployed_sha);
     }
 
     public function test_completes_a_journey_after_a_deterministic_assertion_passes(): void
@@ -1042,23 +1080,31 @@ class QaAgentTest extends TestCase
     }
 
     /** @return array<string, string> */
-    private function expectAutomaticRepairProposal(QaRun $run, MockInterface $model, MockInterface $github, string $failedPage): array
+    private function expectAutomaticRepairProposal(QaRun $run, MockInterface $model, MockInterface $github, string $failedPage, bool $usesLatest = false): array
     {
         $project = $run->project;
-        config(['repository-access.grants' => [$project->user_id => ['example/laravel-demo']]]);
+        config(['repository-access.grants' => [$project->user_id => ['example/laravel-demo']],
+            'repository-access.write_grants' => [$project->user_id => ['example/laravel-demo']]]);
         $files = [self::SOURCE_PATH => '<?php // Repair observed page output', self::TEST_PATH => '<?php // Exercise the failing GET page'];
         $model->shouldReceive('forUser')->once()->withArgs(fn ($user): bool => $user->is($project->user))->andReturnSelf();
         $model->shouldReceive('ready')->once()->andReturnTrue();
         $model->shouldReceive('decide')->once()->ordered()->andReturn(['files' => [self::SOURCE_PATH]]);
-        $model->shouldReceive('decide')->once()->ordered()->andReturnUsing(function (string $instruction, array $context) use ($files, $failedPage): array {
+        $model->shouldReceive('decide')->once()->ordered()->andReturnUsing(function (string $instruction, array $context) use ($files, $failedPage, $run): array {
             $this->assertSame('GET', $context['failure']['method']);
             $this->assertSame($failedPage, $context['failure']['url']);
             $this->assertArrayNotHasKey('qa_identity', $context);
             $this->assertArrayHasKey('observed_browser_actions', $context);
+            if ($run->advanced) {
+                $this->assertSame($run->report['rule_guide'], $context['qa_rule_reference']);
+            }
 
             return ['diagnosis' => 'The page contained a missing dependency.', 'patch_files' => $files, 'regression_test' => self::TEST_PATH];
         });
-        $github->shouldReceive('inspectRepository')->once()->with($project->repository_url)->andReturn(['default_branch' => 'main', 'head_sha' => self::BASE_SHA]);
+        if ($usesLatest) {
+            $github->shouldNotReceive('inspectRepository');
+        } else {
+            $github->shouldReceive('inspectRepository')->once()->with($project->repository_url)->andReturn(['default_branch' => 'main', 'head_sha' => self::BASE_SHA]);
+        }
         $github->shouldReceive('repositoryTree')->once()->with($project->repository_url, self::BASE_SHA)->andReturn([['path' => self::SOURCE_PATH, 'size' => 100]]);
         $github->shouldReceive('readFiles')->once()->with($project->repository_url, self::BASE_SHA, [self::SOURCE_PATH])
             ->andReturn([self::SOURCE_PATH => '<?php // Existing implementation']);
@@ -1109,7 +1155,8 @@ class QaAgentTest extends TestCase
     private function prepareRepair(QaRun $run, array $verificationOverrides = [], bool $serverError = false): array
     {
         $project = $run->project;
-        config(['repository-access.grants' => [$project->user_id => ['example/laravel-demo']]]);
+        config(['repository-access.grants' => [$project->user_id => ['example/laravel-demo']],
+            'repository-access.write_grants' => [$project->user_id => ['example/laravel-demo']]]);
         $snapshot = array_merge($this->snapshot($project), ['source_sha' => self::BASE_SHA]);
         if ($serverError) {
             $snapshot['elements'][] = ['id' => 'e1-2', 'tag' => 'button', 'role' => '', 'label' => '', 'text' => 'Register', 'type' => 'submit'];
